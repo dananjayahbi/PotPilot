@@ -532,8 +532,19 @@ async def run_agent(argv: list[str] | None = None) -> int:
                     "error": "E_BAD_PAYLOAD",
                     "detail": f"invalid payload for {action}",
                 }
+            # Command trail in agent.log: every deck action's fate is visible.
+            # Defensive getattr: never let telemetry logging break dispatch when
+            # a duck-typed result (test fakes) omits hwnd.
+            _dispatch_log = logging.getLogger("potpilot.main")
+            _hwnd = getattr(result, "hwnd", None)
             if result.ok:
+                _dispatch_log.info(
+                    "CMD_POTPLAYER %s ok (%s, hwnd=%s)", action, result.detail, _hwnd
+                )
                 return {}
+            _dispatch_log.warning(
+                "CMD_POTPLAYER %s FAILED: %s (hwnd=%s)", action, result.detail, _hwnd
+            )
             return _dispatch_failure(str(result.detail))
 
         async def _handle_cmd_key(_session: Any, envelope: Any) -> dict[str, Any]:

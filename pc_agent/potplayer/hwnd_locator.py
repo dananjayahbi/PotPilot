@@ -69,6 +69,20 @@ def _matches_potplayer(class_name: str) -> bool:
     return class_name in WINDOW_CLASSES or class_name.lower().startswith(_CLASS_PREFIX)
 
 
+def _window_title(hwnd: int) -> str:
+    try:
+        return win32gui.GetWindowText(hwnd) or ""
+    except win32gui.error:  # pragma: no cover - window died mid-read
+        return ""
+
+
+def _has_media_title(hwnd: int) -> bool:
+    """True for a window carrying media (e.g. 'movie.mkv - PotPlayer'), not the
+    bare empty-instance title ('PotPlayer' / 'PotPlayer64')."""
+    title = _window_title(hwnd)
+    return bool(title) and title.lower() not in ("potplayer", "potplayer64")
+
+
 def _process_pid(hwnd: int) -> int | None:
     try:
         _thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
@@ -175,9 +189,16 @@ class PotPlayerLocator:
         candidates = self._find_by_class()
         if not candidates:
             candidates = self._enum_fallback()
+        else:
+            # Class probe returns one window; pull in same-class siblings so a
+            # topmost EMPTY instance cannot hide the media-loaded one.
+            candidates = self._with_class_siblings(candidates)
         if not candidates:
             return None
-        chosen = self._prefer_foreground(candidates)
+        # Media-carrying instance wins outright (controls target playback);
+        # foreground only tie-breaks when no candidate carries media.
+        media = next((h for h in candidates if _has_media_title(h)), None)
+        chosen = media if media is not None else self._prefer_foreground(candidates)
         pid = _process_pid(chosen)
         info = WindowInfo(
             hwnd=chosen,
@@ -226,6 +247,15 @@ class PotPlayerLocator:
         except win32gui.error:  # pragma: no cover - defensive enumeration guard
             pass
         return candidates
+
+    def _with_class_siblings(self, primary: list[int]) -> list[int]:
+        """Merge exact-class siblings (z-order) into the class-probe result; prefix
+        matches stay out — they only ever qualify via the enum fallback."""
+        merged = list(primary)
+        for hwnd in self._enum_fallback():
+            if hwnd not in merged and _class_name(hwnd) in WINDOW_CLASSES:
+                merged.append(hwnd)
+        return merged
 
     def _prefer_foreground(self, candidates: list[int]) -> int:
         """Multi-instance tie-break: the foreground-owned instance wins (read-only check)."""

@@ -23,7 +23,7 @@ FORBIDDEN_FOCUS_APIS = (
 def win32(monkeypatch):
     """Mock desktop: insertion order == z-order (front-to-back)."""
     desktop = SimpleNamespace(
-        windows={},  # hwnd -> {"class", "visible", "iconic", "pid"}
+        windows={},  # hwnd -> {"class", "visible", "iconic", "pid", "title"}
         foreground=0,
         exit_codes={},  # pid -> exit code
         deny_open=False,
@@ -65,6 +65,11 @@ def win32(monkeypatch):
         lambda hwnd: desktop.windows.get(hwnd, {}).get("class", ""),
     )
     monkeypatch.setattr(
+        hwnd_locator.win32gui,
+        "GetWindowText",
+        lambda hwnd: desktop.windows.get(hwnd, {}).get("title", ""),
+    )
+    monkeypatch.setattr(
         hwnd_locator.win32gui, "GetForegroundWindow", lambda: desktop.foreground
     )
     monkeypatch.setattr(
@@ -92,12 +97,13 @@ def win32(monkeypatch):
     return desktop
 
 
-def _add(desktop, hwnd, class_name="PotPlayer64", pid=11, visible=True, iconic=False):
+def _add(desktop, hwnd, class_name="PotPlayer64", pid=11, visible=True, iconic=False, title=""):
     desktop.windows[hwnd] = {
         "class": class_name,
         "visible": visible,
         "iconic": iconic,
         "pid": pid,
+        "title": title,
     }
     return hwnd
 
@@ -218,6 +224,26 @@ def test_multiple_instances_prefers_foreground_pid(win32):
     _add(win32, 100, pid=11)
     _add(win32, 200, pid=22)
     win32.foreground = 200
+    locator = PotPlayerLocator()
+    assert locator.find() == 200
+    assert locator.get_pid() == 22
+
+
+def test_media_titled_instance_beats_topmost_empty(win32):
+    # Real-world multi-instance: empty window topmost in z-order, movie below it.
+    _add(win32, 100, pid=11, title="PotPlayer")
+    _add(win32, 200, pid=22, title="movie.mkv - PotPlayer")
+    locator = PotPlayerLocator()
+    assert locator.find() == 200
+    assert locator.get_pid() == 22
+
+
+def test_media_titled_instance_beats_foreground_empty(win32):
+    # Media preference outranks the foreground tie-break: controls must target
+    # playback, even when the user has the empty instance focused.
+    _add(win32, 100, pid=11, title="PotPlayer")
+    _add(win32, 200, pid=22, title="Interstellar.2014.mkv - PotPlayer")
+    win32.foreground = 100
     locator = PotPlayerLocator()
     assert locator.find() == 200
     assert locator.get_pid() == 22

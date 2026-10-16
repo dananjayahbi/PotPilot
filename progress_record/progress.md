@@ -59,6 +59,7 @@
 - Real DDC/CI monitor luminance checks (Doc 19 §9). *(Real-PotPlayer live control: done — `verify_codes` 12 PASS.)*
 - Optional: bump AGP to ≥8.11.1 in `android/settings.gradle` so `flutter build apk --release` runs without `--android-skip-build-dependency-validation`; add `assets/potpilot_icon.ico` (tray falls back to generated glyph).
 - Known test-env notes: E2E M4/M5/M6 assume machine exclusivity (Doc 46 §10); `udp_sender` buffer-reuse test hardened against cross-process loopback loss (retries missing encoding; byte-distinctness invariant unchanged).
+- Command `*_RESULT` frames are consumed by neither app layer — dispatch failures surface only in `agent.log` (now fully trailed); optional future UX: transient toast on `ok:false` in the deck.
 
 ---
 
@@ -77,3 +78,4 @@
 | 2026-10-16 | Session 3 launched (4 agents: PC wiring + PyInstaller, InnoSetup, Flutter shell + release APK, E2E suite) | 93% (43/46) |
 | 2026-10-16 | Session 3 complete: wiring + builds + installer + E2E M1–M9 PASS; final sequential gate ALL GREEN (ruff, pytest 477, analyze, flutter 533, 3 artifacts); flaky-test hardening | **100% (46/46)** 🏁 |
 | 2026-10-16 | PotPlayer playback control fixed end-to-end (deck did nothing): Doc 09 table filled with live-verified protocol values; SET_SPEED → steps-mode + speed-belief (0x5016 no-op, 0x5015 unreported); `verify_codes` live 12 PASS / 0 FAIL; gates re-run: ruff ✅, pytest 481 ✅, flutter analyze ✅ | **100% (46/46)** |
+| 2026-10-16 | "Still not working" root-caused with live evidence: user's earlier launches were refused (stale old agent serving the zeroed table) + zero dispatch observability + multi-instance z-order targeting + 20 s WS ping churn (dozed phone). Fixes: `CMD_POTPLAYER … ok/FAILED` log trail, media-title preference in the production locator (+2 tests), ping 30/60. Deck redesign (transport cluster ±step, 5/10/20/30 selector, in-UI volume slider, TRACKS entry, craft-floor polish). Gates: pytest **483** ✅ ruff ✅ analyze ✅ flutter **539** ✅ detector `[]` ✅; APK 64.5 MB + agent exe rebuilt, both live-proven | **100% (46/46)** |

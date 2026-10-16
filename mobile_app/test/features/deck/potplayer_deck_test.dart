@@ -189,15 +189,16 @@ void main() {
       expect(ids.toSet(), hasLength(12), reason: 'ids unique across sends');
     });
 
-    testWidgets('play glyph flips before any telemetry arrives',
+    testWidgets('play icon flips before any telemetry arrives',
         (WidgetTester tester) async {
       await pumpDeck(tester); // no telemetry pushed at all
-      expect(find.text('\u25b6'), findsOneWidget);
-      expect(find.text('\u23f8'), findsNothing);
+      expect(find.byIcon(Icons.play_arrow), findsOneWidget);
+      expect(find.byIcon(Icons.pause), findsNothing);
 
       await tester.tap(find.byKey(deckKeyFor(DeckAction.playPause)));
       await tester.pump(); // same-frame optimistic flip
-      expect(find.text('\u23f8'), findsOneWidget);
+      expect(find.byIcon(Icons.pause), findsOneWidget);
+      expect(find.byIcon(Icons.play_arrow), findsNothing);
       expect(client.sent, hasLength(1));
       expect(client.sent.single.action, 'PLAY_PAUSE');
       expect(haptics, <HapticPattern>[HapticPattern.heavyThud]);

@@ -250,7 +250,16 @@ class WsServer:
         if self._server is not None:
             return
         self._server = await serve(
-            self._handle_connection, host, port, process_request=self._process_request
+            self._handle_connection,
+            host,
+            port,
+            process_request=self._process_request,
+            # Phone-side reality: the remote's screen sleeps (bed mode) and its
+            # WiFi dozes; default 20 s/20 s pings dropped the session mid-use
+            # ("keepalive ping timeout" churn). Tolerate a dozed client while
+            # still reaping genuinely dead peers.
+            ping_interval=30,
+            ping_timeout=60,
         )
         log.info("WS server listening on %s:%s", host, self.port)
 
