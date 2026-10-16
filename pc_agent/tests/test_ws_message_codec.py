@@ -60,7 +60,7 @@ def _valid_frame(**overrides) -> str:
 def test_frozen_constants() -> None:
     assert WS_PORT == 50506
     assert TELEMETRY_INTERVAL_MS == 250
-    assert MAX_FRAME_BYTES == 65536
+    assert MAX_FRAME_BYTES == 2097152
     assert FULL_REFRESH_EVERY_TICKS == 20
     assert GREETING_ACTION == "AUTH_OK"
     assert MDNS_SERVICE_TYPE == "_potpilot._tcp.local."

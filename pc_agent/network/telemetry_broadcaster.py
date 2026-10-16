@@ -21,15 +21,19 @@ connection object; each authenticated client immediately receives a
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import inspect
 import json
 import logging
 import math
+import os
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from typing import Any, Protocol
 
+from pc_agent.media.library_scanner import VIDEO_EXTENSIONS
 from pc_agent.network.ws_message_codec import (
     ACTION_FULL_STATE,
     ACTION_STATE_DELTA,
@@ -55,6 +59,58 @@ _PROVIDER_WARN_INTERVAL_S: float = 60.0
 _MISSING = object()
 
 SnapshotProvider = Callable[[], "dict[str, Any] | Awaitable[dict[str, Any]]"]
+TitleReader = Callable[[int], str]
+
+# Doc 10 window titles look like "movie.mkv - PotPlayer"; the bare
+# empty-instance titles carry no media (Doc 08 `_has_media_title` semantics).
+_PLAYER_SUFFIX_RE = re.compile(
+    r"(?:^|\s)-\s+PotPlayer(?:64|MiniMode)?\s*$", re.IGNORECASE
+)
+_BARE_PLAYER_TITLES = frozenset({"potplayer", "potplayer64"})
+
+
+def _read_window_title(hwnd: int) -> str:
+    """Fresh ``GetWindowTextW`` for a live HWND; ``''`` on any failure.
+
+    Called at most once per 250 ms tick and only for a healthy, alive
+    window — the cost is a single cheap Win32 string read.
+    """
+    if not hwnd:
+        return ""
+    try:
+        buffer = ctypes.create_unicode_buffer(512)
+        length = ctypes.windll.user32.GetWindowTextW(int(hwnd), buffer, 512)
+    except (AttributeError, OSError, ValueError):  # pragma: no cover - host-dependent
+        return ""
+    return buffer.value[:length] if length else ""
+
+
+def title_from_window(raw: str) -> str | None:
+    """Doc 03 §5.6 ``file_title`` from a window title, or ``None`` when idle.
+
+    ``"Inception (2010).mkv - PotPlayer"`` → ``"Inception (2010)"`` (the
+    scanner's filename stem).  Extensions are stripped only for Doc 20's
+    video set so dotted stems survive extensionless title formats; the bare
+    player name means no media → ``None``.
+
+    Some window-title formats prefix the stem with context
+    (``"folder, file.mkv - PotPlayer"`` → ``"folder, file"``).  The true
+    basename is not recoverable without the index, so the prefix is kept and
+    Doc 45 clients match the stem exactly or as a separator-anchored suffix.
+    """
+    title = raw.strip()
+    if not title:
+        return None
+    title = _PLAYER_SUFFIX_RE.sub("", title).strip()
+    if not title or title.casefold() in _BARE_PLAYER_TITLES:
+        return None
+    name = title.replace("/", "\\").rsplit("\\", 1)[-1].strip()
+    if not name:
+        return None
+    stem, extension = os.path.splitext(name)
+    if stem and extension.casefold() in VIDEO_EXTENSIONS:
+        return stem
+    return name
 
 
 class TelemetryPollerLike(Protocol):
@@ -64,8 +120,15 @@ class TelemetryPollerLike(Protocol):
     def latest(self) -> Any | None: ...
 
 
-def snapshot_to_payload(snapshot: Any) -> dict[str, Any]:
-    """Map a Doc 10 ``TelemetrySnapshot`` (or dict/None) to the 7 base wire keys."""
+def snapshot_to_payload(
+    snapshot: Any, *, title_reader: TitleReader | None = None
+) -> dict[str, Any]:
+    """Map a Doc 10 ``TelemetrySnapshot`` (or dict/None) to the 7 base wire keys.
+
+    ``file_title`` priority: an explicit snapshot value (the poller may carry
+    one) → derived from a fresh window-title read when the window is alive
+    and healthy → ``None`` when idle/unavailable (Doc 03 §5.6).
+    """
     if snapshot is None:
         return {
             "position_ms": 0,
@@ -85,13 +148,23 @@ def snapshot_to_payload(snapshot: Any) -> dict[str, Any]:
     found = field("potplayer_found", None)
     if found is None:
         found = bool(field("hwnd", 0))
+    file_title = field("file_title", None)
+    if file_title is None and found:
+        healthy = field("healthy", None)
+        hwnd = int(field("hwnd", 0) or 0)
+        if hwnd and healthy is not False:
+            reader = title_reader if title_reader is not None else _read_window_title
+            try:
+                file_title = title_from_window(reader(hwnd))
+            except Exception:  # pragma: no cover - a reader must never break the tick
+                file_title = None
     return {
         "position_ms": int(field("position_ms", 0)),
         "duration_ms": int(field("duration_ms", 0)),
         "is_playing": bool(field("is_playing", False)),
         "speed": float(field("speed", 1.0)),
         "volume": int(field("volume", 0)),
-        "file_title": field("file_title", None),
+        "file_title": file_title,
         "potplayer_found": bool(found),
     }
 
@@ -104,9 +177,11 @@ class TelemetryBroadcaster:
         poller: TelemetryPollerLike,
         *,
         interval_ms: int = TELEMETRY_INTERVAL_MS,
+        title_reader: TitleReader | None = None,
     ) -> None:
         self._poller = poller
         self._interval_s = interval_ms / 1000.0
+        self._title_reader = title_reader  # window-title seam (None = GetWindowTextW)
         self._clients: set[Any] = set()
         self._sources: dict[str, SnapshotProvider] = {}
         self._source_values: dict[str, dict[str, Any]] = {}
@@ -219,7 +294,9 @@ class TelemetryBroadcaster:
         await self._fanout(self.build_frame(payload, action=action))
 
     async def _collect_state(self) -> dict[str, Any]:
-        state = snapshot_to_payload(getattr(self._poller, "latest", None))
+        state = snapshot_to_payload(
+            getattr(self._poller, "latest", None), title_reader=self._title_reader
+        )
         for name, provider in list(self._sources.items()):
             try:
                 value = provider()
@@ -289,4 +366,5 @@ __all__ = [
     "TelemetryBroadcaster",
     "TelemetryPollerLike",
     "snapshot_to_payload",
+    "title_from_window",
 ]

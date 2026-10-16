@@ -189,6 +189,41 @@ void main() {
       expect(ids.toSet(), hasLength(12), reason: 'ids unique across sends');
     });
 
+    testWidgets(
+        'ASPECT key taps emit CYCLE_ASPECT_RATIO (no payload); frame keys '
+        'emit FRAME_STEP with direction', (WidgetTester tester) async {
+      push();
+      await pumpDeck(tester);
+
+      // Exact wire literals (not deckActionNames lookups): guards the row
+      // wiring AND the mapping table against a frame-step fall-through.
+      client.sent.clear();
+      await tester.tap(find.byKey(deckKeyFor(DeckAction.aspectCycle)));
+      await tester.pump();
+      expect(client.sent, hasLength(1));
+      expect(client.sent.single.type, 'CMD_POTPLAYER');
+      expect(client.sent.single.action, 'CYCLE_ASPECT_RATIO');
+      expect(client.sent.single.payload, <String, dynamic>{});
+
+      client.sent.clear();
+      await tester.tap(find.byKey(deckKeyFor(DeckAction.frameNext)));
+      await tester.pump();
+      expect(client.sent.single.type, 'CMD_POTPLAYER');
+      expect(client.sent.single.action, 'FRAME_STEP');
+      expect(client.sent.single.payload, <String, dynamic>{
+        'direction': 'FORWARD',
+      });
+
+      client.sent.clear();
+      await tester.tap(find.byKey(deckKeyFor(DeckAction.framePrev)));
+      await tester.pump();
+      expect(client.sent.single.type, 'CMD_POTPLAYER');
+      expect(client.sent.single.action, 'FRAME_STEP');
+      expect(client.sent.single.payload, <String, dynamic>{
+        'direction': 'BACKWARD',
+      });
+    });
+
     testWidgets('play icon flips before any telemetry arrives',
         (WidgetTester tester) async {
       await pumpDeck(tester); // no telemetry pushed at all

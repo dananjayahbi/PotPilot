@@ -118,7 +118,7 @@
     "CYCLE_ASPECT_RATIO": {
       "message": "WM_USER",
       "wparam": "0x5010",
-      "lparam": "0x246",
+      "lparam": "0x275",
       "param": null,
       "mode": "direct",
       "needs_ack": false,

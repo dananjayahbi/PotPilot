@@ -112,7 +112,7 @@ ACTION_CASES = [
     ("SEEK_DELTA", "seek_delta", "SEEK", (WM_USER, 0x5005, 3_000)),
     ("FRAME_STEP", "frame_fwd", "FRAME_STEP", (WM_USER, 0x5010, 0x46)),
     ("TOGGLE_FULLSCREEN", "fullscreen", "TOGGLE_FULLSCREEN", (WM_COMMAND, 0x271D, 0)),
-    ("CYCLE_ASPECT_RATIO", "aspect", "CYCLE_ASPECT_RATIO", (WM_USER, 0x5010, 0x246)),
+    ("CYCLE_ASPECT_RATIO", "aspect", "CYCLE_ASPECT_RATIO", (WM_USER, 0x5010, 0x275)),
     ("SET_VOLUME", "volume", "SET_VOLUME", (WM_USER, 0x5001, 42)),
     ("SPEED_DEFAULT", "speed_default", "SPEED_DEFAULT", (WM_USER, 0x5010, 0x5A)),
     ("CYCLE_AUDIO", "audio", "CYCLE_AUDIO", (WM_USER, 0x5010, 0x641)),

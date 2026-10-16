@@ -286,6 +286,96 @@ def test_list_media_result_shape(tmp_path: Path) -> None:
     }
 
 
+def test_handle_list_media_attaches_thumbnail_b64(tmp_path: Path) -> None:
+    """The wire handler enriches items with the optional Doc 45 field while
+    the pure query API keeps the frozen Doc 03 §5.5 item field set."""
+    root = tmp_path / "attach"
+    _write(root / "Film.mkv", 64, mtime=1_700_000_000)
+    scanner = _scan(FakeConfig([str(root)]))
+
+    class _StubThumbs:
+        def attach(self, items: list[dict[str, Any]]) -> None:
+            for item in items:
+                item["thumbnail_b64"] = "ZmFrZQ=="
+
+    scanner._thumbs = _StubThumbs()  # attribute seam — no ffmpeg in this test
+
+    async def scenario() -> dict[str, Any]:
+        router = WsRouter()
+        router.register("CMD_MEDIA", ACT_LIST_MEDIA, scanner.handle_list_media)
+        session = WsSession(FakeSocket())
+        return await router.dispatch(session, _envelope(ACT_LIST_MEDIA, {}))
+
+    reply = asyncio.run(scenario())
+    assert reply["action"] == "LIST_MEDIA_RESULT"
+    assert set(reply["payload"]) == {"ok", "folders", "items", "total", "offset", "limit"}
+    assert reply["payload"]["items"][0]["thumbnail_b64"] == "ZmFrZQ=="
+    pure = scanner.list_media({})
+    assert set(pure["items"][0]) == {
+        "name",
+        "path",
+        "size_bytes",
+        "modified_at",
+        "has_subs",
+    }  # list_media() itself never attaches thumbnails
+
+
+def test_handle_rescan_media_warms_thumbs_after_the_walk(tmp_path: Path) -> None:
+    """Once a LIST_MEDIA created the cache, a user RESCAN queues thumbnail
+    generation for the whole index when that walk lands (Doc 45 §4.2.5)."""
+    root = tmp_path / "warm"
+    _write(root / "Film.mkv", 64, mtime=1_700_000_000)
+    scanner = LibraryScanner(FakeConfig([str(root)]))
+
+    class _StubThumbs:
+        def __init__(self) -> None:
+            self.pairs: list[tuple[str, int]] = []
+
+        def request_many(self, pairs: Any) -> None:
+            self.pairs = list(pairs)
+
+    stub = _StubThumbs()
+    scanner._thumbs = stub  # a LIST_MEDIA happened earlier (lazy cache seam)
+
+    async def scenario() -> dict[str, Any]:
+        router = WsRouter()
+        router.register("CMD_MEDIA", ACT_RESCAN_MEDIA, scanner.handle_rescan_media)
+        session = WsSession(FakeSocket())
+        reply = await router.dispatch(session, _envelope(ACT_RESCAN_MEDIA, {}))
+        task = scanner._scan_task
+        assert task is not None
+        await task
+        await asyncio.sleep(0)  # flush the done-callback that queues the warm-up
+        await asyncio.sleep(0)
+        return reply
+
+    reply = asyncio.run(scenario())
+    assert reply["payload"]["ok"] is True and reply["payload"]["queued"] is True
+    assert stub.pairs == [(str(root / "Film.mkv"), 1_700_000_000)]
+
+
+def test_handle_rescan_media_skips_warmup_before_any_list(tmp_path: Path) -> None:
+    """No LIST_MEDIA yet → no thumb cache → the rescan never starts ffmpeg."""
+    root = tmp_path / "cold"
+    _write(root / "Film.mkv", 64)
+    scanner = LibraryScanner(FakeConfig([str(root)]))
+
+    async def scenario() -> dict[str, Any]:
+        router = WsRouter()
+        router.register("CMD_MEDIA", ACT_RESCAN_MEDIA, scanner.handle_rescan_media)
+        session = WsSession(FakeSocket())
+        reply = await router.dispatch(session, _envelope(ACT_RESCAN_MEDIA, {}))
+        task = scanner._scan_task
+        if task is not None:
+            await task
+        await asyncio.sleep(0)
+        return reply
+
+    reply = asyncio.run(scenario())
+    assert reply["payload"]["ok"] is True
+    assert scanner._thumbs is None  # warm-up no-oped: nothing queued, no worker
+
+
 def test_reentrant_scan_guard(tmp_path: Path, monkeypatch: Any) -> None:
     root = tmp_path / "reentry"
     _write(root / "One.mkv", 10)

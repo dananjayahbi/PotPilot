@@ -142,6 +142,33 @@ void main() {
       expect(client.sent.single.payload, <String, dynamic>{'multiplier': 1.0});
     });
 
+    test('aspectCycle sends CYCLE_ASPECT_RATIO with no payload; frame keys '
+        'send FRAME_STEP with direction', () async {
+      // ASPECT reporting: exact wire literals (not deckActionNames lookups)
+      // so a wrong mapping entry or a frame-branch fall-through fails loudly.
+      await controller.dispatch(DeckAction.aspectCycle, _state());
+      expect(client.sent, hasLength(1));
+      expect(client.sent.single.type, 'CMD_POTPLAYER');
+      expect(client.sent.single.action, 'CYCLE_ASPECT_RATIO');
+      expect(client.sent.single.payload, <String, dynamic>{});
+
+      client.sent.clear();
+      await controller.dispatch(DeckAction.frameNext, _state());
+      expect(client.sent.single.type, 'CMD_POTPLAYER');
+      expect(client.sent.single.action, 'FRAME_STEP');
+      expect(client.sent.single.payload, <String, dynamic>{
+        'direction': 'FORWARD',
+      });
+
+      client.sent.clear();
+      await controller.dispatch(DeckAction.framePrev, _state());
+      expect(client.sent.single.type, 'CMD_POTPLAYER');
+      expect(client.sent.single.action, 'FRAME_STEP');
+      expect(client.sent.single.payload, <String, dynamic>{
+        'direction': 'BACKWARD',
+      });
+    });
+
     test('debounce: two taps within 80 ms -> one send, third goes through',
         () async {
       await controller.dispatch(DeckAction.playPause, _state());

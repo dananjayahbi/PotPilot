@@ -3,7 +3,7 @@
   "frozen_by": "plan-series/03_websocket_json_schema_spec.md (CONTRACT FREEZE)",
   "ws_port": 50506,
   "telemetry_interval_ms": 250,
-  "max_frame_bytes": 65536,
+  "max_frame_bytes": 2097152,
   "full_refresh_every_ticks": 20,
   "mdns_service_type": "_potpilot._tcp.local.",
   "envelope": {
@@ -180,9 +180,10 @@
                 "path": "string",
                 "size_bytes": "integer",
                 "modified_at": "integer (unix s)",
-                "has_subs": "boolean"
+                "has_subs": "boolean",
+                "thumbnail_b64": {"type": "string", "optional": true, "semantics": "Base64-encoded JPEG frame (<= 15360 bytes, width 320 px) from the Doc 20 thumb cache; absent while ffmpeg is unavailable or the frame is not generated yet (clients show their placeholder)", "producer_doc": 20}
               },
-              "semantics": "Matching entries, paged"
+              "semantics": "Matching entries, paged; thumbnail_b64 is an optional Doc 45 additive field — absent key means no thumbnail yet, never an error. Page-combined base64 stops at 1.5 MiB so one frame stays under max_frame_bytes"
             },
             "total": {"type": "integer", "semantics": "Matching entries before paging"},
             "offset": {"type": "integer", "semantics": "Echoed paging window"},
@@ -200,6 +201,7 @@
           "payload": {
             "path": {"type": "string", "semantics": "Absolute file inside a configured dir; launches fullscreen + snaps primary"}
           },
+          "result_payload": {"ok": true, "started": {"type": "boolean", "semantics": "Always true on success (Doc 21): the spawn/single-instance hand-off completed before the ack; Doc 45 clients then confirm actual playback via telemetry file_title or potplayer_found+duration within their confirmation window", "producer_doc": 21}},
           "handler_doc": 21
         }
       }
@@ -236,7 +238,7 @@
       "is_playing": {"type": "boolean", "semantics": "Play state", "producer_doc": 10},
       "speed": {"type": "number", "semantics": "Playback multiplier 0.2-4.0, default 1.0", "producer_doc": 10},
       "volume": {"type": "integer", "minimum": 0, "maximum": 100, "semantics": "PotPlayer internal volume (not Windows master)", "producer_doc": 10},
-      "file_title": {"type": "string|null", "semantics": "Basename without extension; null when idle (clients must not invent a title alias)", "producer_doc": "10/18"},
+      "file_title": {"type": "string|null", "semantics": "Filename stem without extension; null when idle. Window-title context prefixes are preserved (e.g. 'folder, file') — clients match the stem exactly or as a separator-anchored suffix (', stem', '\\stem', '/stem'); clients must not invent other title aliases", "producer_doc": "10/18"},
       "potplayer_found": {"type": "boolean", "semantics": "PotPlayer64 HWND alive (Doc 08)", "producer_doc": 8},
       "blackout_active": {"type": "boolean", "semantics": "Blackout overlays currently shown", "producer_doc": 12},
       "brightness": {"type": "integer|null", "minimum": 0, "maximum": 100, "semantics": "First DDC/CI-capable monitor luminance; null = unsupported/unknown", "producer_doc": 19},

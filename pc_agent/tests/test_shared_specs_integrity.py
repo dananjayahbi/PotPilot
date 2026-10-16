@@ -84,7 +84,9 @@ def test_ws_schema_frozen_constants() -> None:
         MDNS_SERVICE_TYPE,
     )
     assert list(schema["envelope"]) == WS_ENVELOPE_KEYS, list(schema["envelope"])
-    assert schema["max_frame_bytes"] == 65536
+    # Doc 45 raised the cap from 64 KiB so one LIST_MEDIA page can carry its
+    # optional thumbnail_b64 frames (≤ 50 × ≤ 15 KB → ≤ 1.5 MiB of base64).
+    assert schema["max_frame_bytes"] == 2097152
     assert schema["full_refresh_every_ticks"] == 20
 
 

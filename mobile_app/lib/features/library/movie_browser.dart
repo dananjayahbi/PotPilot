@@ -1,19 +1,26 @@
-// Doc 45: Netflix-style in-app movie library browser — the Movie Library tab.
+// Doc 45: in-app movie library browser — the Movie Library tab.
 //
 // On first open the browser pages through Doc 03 §5.5 `CMD_MEDIA/LIST_MEDIA`
-// (`limit: 200`, `offset: 0,200,…` until `offset >= total`) into an
+// (`limit: 50`, `offset: 0,50,…` until `offset >= total`) into an
 // in-memory cache; search/sort are therefore instant, purely client-side
-// operations with zero PC round-trips (§4.2). Refresh sends a real
-// `RESCAN_MEDIA` round-trip, shows the queued ack and re-queries ~2 s later.
+// operations with zero PC round-trips (§4.2). Nested movie folders render as
+// relative-path sections (`library_sections.dart`) — one heading per parent
+// directory — while the folder-chip row keeps its drill-down scopes.
+// Refreshing is strictly manual (icon button + pull-to-refresh): it sends a
+// real `RESCAN_MEDIA` round-trip, shows the queued ack and re-queries ~2 s
+// later; no path re-queries on its own (no reconnect/launch auto-refresh).
 // A single tap fires `LAUNCH_MEDIA {path}` and the card flips to "Now
-// Playing" only when Doc 33 telemetry `file_title` confirms the launch
-// (never optimistic guesswork, §4.3).
+// Playing" only when Doc 33 telemetry `file_title` confirms the launch — or,
+// when the ack carried `started:true`, when telemetry shows a live PotPlayer
+// with media loaded (never optimistic guesswork, §4.3). Cards render the
+// optional `thumbnail_b64` frame through `thumbnail_cache.dart` (placeholder
+// while the PC has not produced one, fallback when decoding fails).
 //
 // Transport: Doc 31's `WsClient` behind the injectable [LibrarySocket] seam
 // (pattern: Doc 33's `TelemetrySocket`). Data: Doc 20's frozen wire record
-// (`name`/`path`/`size_bytes`/`modified_at`/`has_subs`). Visuals: Doc 29
-// OLED tokens only. Sort chip persistence uses the `library_sort`
-// `shared_preferences` key owned by this doc (§6/§10).
+// (`name`/`path`/`size_bytes`/`modified_at`/`has_subs`/`thumbnail_b64?`).
+// Visuals: Doc 29 OLED tokens only. Sort chip persistence uses the
+// `library_sort` `shared_preferences` key owned by this doc (§6/§10).
 //
 // Correlation guard (§4.1): every request carries a locally-built envelope
 // `id`; replies for superseded requests are dropped latest-wins. Doc 31's
@@ -32,9 +39,13 @@ import '../../core/theme/oled_theme.dart';
 import '../../network/telemetry_provider.dart';
 import '../../network/ws_client.dart';
 import '../../network/ws_message_codec.dart';
+import 'library_sections.dart';
+import 'thumbnail_cache.dart';
 
-/// Page size of the `LIST_MEDIA` walk (§4.2; Doc 03 limit max = 200).
-const int kLibraryPageSize = 200;
+/// Page size of the `LIST_MEDIA` walk (§4.2). Capped at 50 so one reply —
+/// including its optional `thumbnail_b64` frames (≤ 15 KB each) — stays well
+/// under the frozen `max_frame_bytes`.
+const int kLibraryPageSize = 50;
 
 /// Debounce before a typed query hits the in-memory cache (§4.2.2).
 const Duration kLibrarySearchDebounce = Duration(milliseconds: 200);
@@ -94,6 +105,7 @@ class MovieEntry {
     required this.sizeBytes,
     required this.modified,
     required this.hasSrt,
+    this.thumbnailB64,
   });
 
   /// Parses Doc 20's frozen `MediaEntryJSON` record (§5).
@@ -106,6 +118,7 @@ class MovieEntry {
         (json['modified_at'] as num).toInt() * 1000,
       ),
       hasSrt: json['has_subs'] as bool,
+      thumbnailB64: json['thumbnail_b64'] as String?,
     );
   }
 
@@ -124,6 +137,10 @@ class MovieEntry {
   /// Companion `.srt` presence flag from Doc 20.
   final bool hasSrt;
 
+  /// Optional Doc 45 JPEG frame (base64) — null while the PC has not
+  /// produced a thumbnail (missing ffmpeg / not generated yet).
+  final String? thumbnailB64;
+
   @override
   bool operator ==(Object other) =>
       other is MovieEntry &&
@@ -131,10 +148,12 @@ class MovieEntry {
       other.title == title &&
       other.sizeBytes == sizeBytes &&
       other.modified == modified &&
-      other.hasSrt == hasSrt;
+      other.hasSrt == hasSrt &&
+      other.thumbnailB64 == thumbnailB64;
 
   @override
-  int get hashCode => Object.hash(path, title, sizeBytes, modified, hasSrt);
+  int get hashCode =>
+      Object.hash(path, title, sizeBytes, modified, hasSrt, thumbnailB64);
 
   @override
   String toString() =>
@@ -226,13 +245,45 @@ final Provider<LibrarySocket> librarySocketProvider =
 });
 
 /// True when live telemetry says [title] is currently playing: the WS
-/// session is alive, `file_title` matches the entry's stem, and
-/// `potplayer_found` (Doc 33 extras) is not an explicit `false`.
+/// session is alive, `file_title` names it, and `potplayer_found` (Doc 33
+/// extras) is not an explicit `false`.
+///
+/// [fileTitle] is matched exactly first, then as a separator-anchored
+/// suffix: some PotPlayer window-title formats carry a context prefix
+/// (`"folder, file.mkv - PotPlayer"` → `"folder, file"`), and only the app
+/// knows the exact filename stem to anchor on.
 bool libraryNowPlaying(TelemetryState state, String title) {
-  if (!state.isConnected || state.fileTitle != title) {
+  final String? fileTitle = state.fileTitle;
+  if (!state.isConnected || fileTitle == null || fileTitle.isEmpty) {
+    return false;
+  }
+  if (!libraryTitleMatches(fileTitle, title)) {
     return false;
   }
   return state.extras['potplayer_found'] != false;
+}
+
+/// True when telemetry [fileTitle] names [entryTitle]: an exact match, or the
+/// stem immediately after a `, `, `\` or `/` separator (context-prefixed
+/// window titles). Anchoring on the separator keeps `Clip_3` from matching a
+/// stray `..., Weird_3` title.
+bool libraryTitleMatches(String fileTitle, String entryTitle) {
+  if (fileTitle == entryTitle) {
+    return true;
+  }
+  return fileTitle.endsWith(', $entryTitle') ||
+      fileTitle.endsWith('\\$entryTitle') ||
+      fileTitle.endsWith('/$entryTitle');
+}
+
+/// Fallback launch confirmation (§4.3): the `LAUNCH_MEDIA` ack carried
+/// `started:true` and live telemetry shows a PotPlayer window with media
+/// loaded — used while `file_title` still reads the pre-launch value (the
+/// window title lags the spawn by a tick or two).
+bool libraryPlaybackActive(TelemetryState state) {
+  return state.isConnected &&
+      state.durationMs > 0 &&
+      state.extras['potplayer_found'] == true;
 }
 
 /// Fetch is unreachable: WS not connected, or no reply before timeout.
@@ -337,6 +388,7 @@ class LibraryNotifier extends AsyncNotifier<List<MovieEntry>> {
   String? _inflightPath;
   Completer<bool>? _confirm;
   String? _confirmTitle;
+  bool? _confirmStarted;
   String? _notice;
 
   Timer? _debounce;
@@ -384,7 +436,9 @@ class LibraryNotifier extends AsyncNotifier<List<MovieEntry>> {
     return message;
   }
 
-  /// Re-fetches the full index from the PC (also used by pull-to-refresh).
+  /// Re-fetches the full index from the PC — invoked only by explicit user
+  /// affordances (app-bar refresh button, pull-to-refresh, empty/offline
+  /// Retry actions); nothing calls this on a timer or connection event.
   ///
   /// Performs the real `RESCAN_MEDIA` round-trip → queued ack → ~2 s
   /// settle → paged `LIST_MEDIA` re-query (§4.2.4). With `force:false` a
@@ -821,14 +875,19 @@ class LibraryNotifier extends AsyncNotifier<List<MovieEntry>> {
       if (_isErrorReply(reply)) {
         final int code = _errorCode(reply);
         if (code == errorMediaNotFound) {
-          _notice = 'File not found on PC';
-          unawaited(refresh(force: true)); // auto re-index (§7)
+          _notice = 'File not found on PC'; // no auto re-index — refresh is manual
         } else {
           _notice = _errorMessage(reply) ?? 'Launch failed on PC';
         }
         return false;
       }
-      final bool confirmed = await _awaitConfirmation(entry.title);
+      if (reply.payload['ok'] == false) {
+        // Domain failures ship as <ACTION>_RESULT {ok:false, error, detail}.
+        _notice = _launchResultFailure(reply);
+        return false;
+      }
+      final bool started = reply.payload['started'] == true;
+      final bool confirmed = await _awaitConfirmation(entry.title, started: started);
       if (!confirmed) {
         _notice = 'Launch not confirmed — check PotPlayer';
         return false;
@@ -850,15 +909,18 @@ class LibraryNotifier extends AsyncNotifier<List<MovieEntry>> {
     }
   }
 
-  /// Waits up to 2 s for telemetry `file_title` to confirm [title] (§4.3.3).
-  Future<bool> _awaitConfirmation(String title) async {
-    if (libraryNowPlaying(ref.read(telemetryProvider), title)) {
+  /// Waits up to 2 s for a launch confirmation (§4.3.3): telemetry
+  /// `file_title` matching [title] (strong), or — when the ack said
+  /// [started] — telemetry showing a live PotPlayer with media loaded.
+  Future<bool> _awaitConfirmation(String title, {required bool started}) async {
+    if (_isLaunchConfirmed(ref.read(telemetryProvider), title, started)) {
       return true;
     }
     final Completer<bool> completer = Completer<bool>();
     _confirm?.complete(false); // supersede a stale waiter, if any
     _confirm = completer;
     _confirmTitle = title;
+    _confirmStarted = started;
     final Timer timer = Timer(kLibraryConfirmTimeout, () {
       if (!completer.isCompleted) {
         completer.complete(false);
@@ -871,8 +933,18 @@ class LibraryNotifier extends AsyncNotifier<List<MovieEntry>> {
       if (identical(_confirm, completer)) {
         _confirm = null;
         _confirmTitle = null;
+        _confirmStarted = null;
       }
     }
+  }
+
+  /// True when [state] confirms the launch of [title]: the strong
+  /// `file_title` match, or the weak started + playback-active fallback.
+  bool _isLaunchConfirmed(TelemetryState state, String title, bool started) {
+    if (libraryNowPlaying(state, title)) {
+      return true;
+    }
+    return started && libraryPlaybackActive(state);
   }
 
   /// Completes the pending launch confirmation on a matching telemetry tick.
@@ -882,21 +954,36 @@ class LibraryNotifier extends AsyncNotifier<List<MovieEntry>> {
     if (confirm == null || confirm.isCompleted || title == null) {
       return;
     }
-    if (libraryNowPlaying(state, title)) {
+    if (_isLaunchConfirmed(state, title, _confirmStarted ?? false)) {
       confirm.complete(true);
     }
   }
 
+  /// User-facing notice for a `LAUNCH_MEDIA_RESULT {ok:false, …}` reply:
+  /// names the problem (frozen Doc 21 `E_*` code, else the PC detail).
+  String _launchResultFailure(WsMessage reply) {
+    final Object? error = reply.payload['error'];
+    if (error == 'E_FILE_NOT_FOUND') {
+      return 'File not found on PC';
+    }
+    final Object? detail = reply.payload['detail'];
+    if (detail is String && detail.isNotEmpty) {
+      return detail;
+    }
+    if (error is String && error.isNotEmpty) {
+      return 'Launch failed on PC ($error)';
+    }
+    return 'Launch failed on PC';
+  }
+
   // ---------------------------------------------------------- connection
 
-  /// Doc 31 reconnect hook: banner flips immediately; a reconnect
-  /// auto-refetches the index (§7).
+  /// Doc 31 reconnect hook: the banner flips immediately, but the index is
+  /// never re-queried automatically — refreshing is strictly manual (icon
+  /// button / pull-to-refresh / the Retry panels, §7).
   void _onConnectionState(WsConnectionState connection) {
     if (connection == WsConnectionState.connected) {
       _offline = false;
-      if (_buildDone) {
-        unawaited(refresh(force: true));
-      }
       _emit();
     } else if (!_offline) {
       _offline = true;
@@ -1088,39 +1175,64 @@ class MovieBrowserScreen extends ConsumerWidget {
         onAction: () => unawaited(notifier.refresh(force: true)),
       );
     }
-    return GridView.builder(
+    // Display-only grouping: the flat sorted cache is sectioned per parent
+    // directory with headings relative to the deepest common ancestor.
+    final List<LibrarySection> sections = buildLibrarySections(entries);
+    return CustomScrollView(
       key: const Key('library_grid'),
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        mainAxisSpacing: 8,
-        crossAxisSpacing: 8,
-        childAspectRatio: 0.72,
-      ),
-      itemCount: entries.length,
-      itemBuilder: (BuildContext context, int index) {
-        final MovieEntry entry = entries[index];
-        return _MovieCard(
-          key: ValueKey<String>('library_card_${entry.path}'),
-          entry: entry,
-          nowPlaying: nowPlaying(entry),
-          launching: notifier.launchingPath == entry.path,
-          onTap: () async {
-            final ScaffoldMessengerState messenger =
-                ScaffoldMessenger.of(context);
-            final bool ok = await notifier.launch(entry);
-            if (ok) {
-              return;
-            }
-            messenger.showSnackBar(
-              _librarySnackBar(
-                notifier.takeNotice() ?? 'Launch failed on PC',
+      slivers: <Widget>[
+        for (final LibrarySection section in sections) ...<Widget>[
+          SliverToBoxAdapter(
+            child: _SectionHeader(
+              heading: section.heading,
+              count: section.entries.length,
+              isFirst: identical(section, sections.first),
+            ),
+          ),
+          SliverPadding(
+            padding: EdgeInsets.fromLTRB(
+              12,
+              0,
+              12,
+              identical(section, sections.last) ? 12 : 0,
+            ),
+            sliver: SliverGrid(
+              delegate: SliverChildBuilderDelegate(
+                (BuildContext context, int index) {
+                  final MovieEntry entry = section.entries[index];
+                  return _MovieCard(
+                    key: ValueKey<String>('library_card_${entry.path}'),
+                    entry: entry,
+                    nowPlaying: nowPlaying(entry),
+                    launching: notifier.launchingPath == entry.path,
+                    onTap: () async {
+                      final ScaffoldMessengerState messenger =
+                          ScaffoldMessenger.of(context);
+                      final bool ok = await notifier.launch(entry);
+                      if (ok) {
+                        return;
+                      }
+                      messenger.showSnackBar(
+                        _librarySnackBar(
+                          notifier.takeNotice() ?? 'Launch failed on PC',
+                        ),
+                      );
+                    },
+                  );
+                },
+                childCount: section.entries.length,
               ),
-            );
-          },
-        );
-      },
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: 0.72,
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -1137,13 +1249,63 @@ SnackBar _librarySnackBar(String message) {
   );
 }
 
+/// One section heading row: folder icon, the directory path relative to the
+/// common ancestor of the visible entries, and the section's title count.
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({
+    required this.heading,
+    required this.count,
+    required this.isFirst,
+  });
+
+  final String heading;
+  final int count;
+
+  /// The first heading sits closer to the sort chips; later sections get
+  /// generous separation above them (more space above a heading than below).
+  final bool isFirst;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      key: ValueKey<String>('library_section_$heading'),
+      padding: EdgeInsets.fromLTRB(12, isFirst ? 8 : 20, 12, 6),
+      child: Row(
+        children: <Widget>[
+          const Icon(
+            Icons.folder_outlined,
+            size: 15,
+            color: AppColors.amber,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              heading,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTypography.label.copyWith(
+                color: AppColors.textPrimary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$count ${count == 1 ? 'title' : 'titles'}',
+            style: AppTypography.label.copyWith(color: AppColors.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Amber-dim "Offline — retrying…" banner above the search bar (§7).
 class _OfflineBanner extends StatelessWidget {
   const _OfflineBanner();
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
+  Widget build(BuildContext context) {    return Container(
       key: const Key('library_offline_banner'),
       width: double.infinity,
       color: AppColors.crimsonDim,
@@ -1450,7 +1612,8 @@ class _StatusPanel extends StatelessWidget {
   }
 }
 
-/// One title card: mono-truncated 2-line title, size · date subtitle, SRT
+/// One title card: 16:9 thumbnail (or placeholder while the PC has not
+/// produced a frame), mono-truncated 2-line title, size · date subtitle, SRT
 /// badge, optimistic "Launching…" overlay and telemetry-confirmed "Now
 /// Playing" ring (§4.3/§4.4).
 class _MovieCard extends StatelessWidget {
@@ -1486,6 +1649,20 @@ class _MovieCard extends StatelessWidget {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
+                SizedBox(
+                  width: double.infinity,
+                  child: AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: MovieThumbnail(
+                        path: entry.path,
+                        thumbnailB64: entry.thumbnailB64,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
                 Text(
                   entry.title,
                   maxLines: 2,

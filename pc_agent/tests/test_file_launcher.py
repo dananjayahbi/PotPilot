@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -82,21 +83,51 @@ class FakeSocket:
 
 @pytest.fixture(autouse=True)
 def spawn(monkeypatch: Any) -> SimpleNamespace:
-    """Patch ``subprocess.run`` for EVERY test — a real PotPlayer must never start."""
-    env = SimpleNamespace(argvs=[], events=[], error=None, delay_s=0.0)
+    """Patch ``subprocess.Popen`` for EVERY test — a real PotPlayer must never start.
 
-    def fake_run(argv: list[str], timeout: float | None = None, **kwargs: Any) -> SimpleNamespace:
-        del timeout, kwargs
+    The fake process records ``start``/``end`` events inside ``wait()`` so the
+    launch-sequencing tests keep their original blocking-run semantics.
+    """
+    env = SimpleNamespace(argvs=[], events=[], error=None, delay_s=0.0, exit_code=0)
+
+    class _FakeProc:
+        def __init__(self, argv: list[str]) -> None:
+            self._argv = list(argv)
+            self._started = False
+            self._ended = False
+            self._remaining = env.delay_s
+
+        def wait(self, timeout: float | None = None) -> int:
+            file = self._argv[1]
+            if not self._started:
+                self._started = True
+                env.events.append(("start", file))
+            if self._ended:
+                return env.exit_code
+            if timeout is not None and self._remaining > timeout:
+                time.sleep(timeout)
+                self._remaining -= timeout
+                raise subprocess.TimeoutExpired(self._argv, timeout)
+            if self._remaining:
+                time.sleep(self._remaining)
+                self._remaining = 0.0
+            if not self._ended:
+                self._ended = True
+                env.events.append(("end", file))
+            return env.exit_code
+
+    def fake_popen(argv: list[str], **kwargs: Any) -> _FakeProc:
+        del kwargs
         env.argvs.append(list(argv))
-        env.events.append(("start", argv[1]))
-        if env.delay_s:
-            time.sleep(env.delay_s)
-        env.events.append(("end", argv[1]))
         if env.error is not None:
             raise env.error
-        return SimpleNamespace(returncode=0)
+        return _FakeProc(argv)
 
-    monkeypatch.setattr(fl, "subprocess", SimpleNamespace(run=fake_run))
+    monkeypatch.setattr(
+        fl,
+        "subprocess",
+        SimpleNamespace(Popen=fake_popen, TimeoutExpired=subprocess.TimeoutExpired),
+    )
     return env
 
 
@@ -194,7 +225,10 @@ def test_builds_launch_command_with_fullscreen_flag(
     assert result.snapped is True
     assert result.elapsed_ms >= 0
     assert reply["action"] == "LAUNCH_MEDIA_RESULT"
-    assert reply["payload"] == {"ok": True}  # hwnd/snapped/elapsed never on the wire
+    assert reply["payload"] == {
+        "ok": True,
+        "started": True,
+    }  # started = spawn/hand-off done; hwnd/snapped/elapsed never on the wire
 
 
 def test_uses_configured_player_path_over_default(
@@ -221,12 +255,51 @@ def test_uses_configured_player_path_over_default(
     assert excinfo.value.code == ERR_PLAYER_NOT_FOUND
     assert str(bad) in excinfo.value.detail
 
-    # No config at all → the default path is tried and named.
+    # No config at all → default candidates are probed (patch to an absent set).
+    absent_default = str(tmp_path / "no_default.exe")
+    monkeypatch.setattr(fl, "DEFAULT_PLAYER_PATH", absent_default)
+    monkeypatch.setattr(fl, "default_player_candidates", lambda: (absent_default,))
     launcher3 = FileLauncher(FakeLocator([99]), FakeSnapper(), FakeConfig(None))
     with pytest.raises(FileLaunchError) as excinfo2:
         asyncio.run(launcher3.launch(str(video)))
     assert excinfo2.value.code == ERR_PLAYER_NOT_FOUND
-    assert absent_default in excinfo2.value.detail
+    assert absent_default in excinfo2.value.detail  # the tried path is named (§7)
+
+
+def test_no_config_probes_known_install_candidates(
+    tmp_path: Path, monkeypatch: Any, spawn: SimpleNamespace
+) -> None:
+    """Without a config key, the first *existing* default candidate wins."""
+    missing1 = str(tmp_path / "absent_a.exe")
+    present = tmp_path / "PotPlayerMini.exe"
+    present.write_bytes(b"MZ")
+    missing2 = str(tmp_path / "absent_b.exe")
+    monkeypatch.setattr(
+        fl, "default_player_candidates", lambda: (missing1, str(present), missing2)
+    )
+    video = _video(tmp_path)
+
+    launcher = FileLauncher(FakeLocator([99]), FakeSnapper(), FakeConfig(None))
+    asyncio.run(launcher.launch(str(video)))
+    assert spawn.argvs[0][0] == str(present)  # skipped the missing one, stopped at first hit
+
+
+def test_configured_wrong_path_does_not_fall_back_to_candidates(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """§7: configured-but-wrong → error naming it, even when a candidate exists."""
+    present = tmp_path / "real_player.exe"
+    present.write_bytes(b"MZ")
+    monkeypatch.setattr(fl, "default_player_candidates", lambda: (str(present),))
+    video = _video(tmp_path)
+
+    launcher = FileLauncher(
+        FakeLocator([99]), FakeSnapper(), FakeConfig(str(tmp_path / "gone.exe"))
+    )
+    with pytest.raises(FileLaunchError) as excinfo:
+        asyncio.run(launcher.launch(str(video)))
+    assert excinfo.value.code == ERR_PLAYER_NOT_FOUND
+    assert "gone.exe" in excinfo.value.detail
 
 
 def test_snap_invoked_after_hwnd_resolved(tmp_path: Path, spawn: SimpleNamespace) -> None:
@@ -274,7 +347,7 @@ def test_concurrent_launches_serialized(tmp_path: Path, spawn: SimpleNamespace) 
     exe = _exe(tmp_path)
     video_a = _video(tmp_path, "A.mkv")
     video_b = _video(tmp_path, "B.mkv")
-    spawn.delay_s = 0.1  # block inside subprocess.run so overlap would be visible
+    spawn.delay_s = 0.1  # block inside the hand-off wait so overlap would be visible
     launcher = FileLauncher(FakeLocator([111]), FakeSnapper(), FakeConfig(str(exe)))
 
     async def scenario() -> list[Any]:
@@ -312,3 +385,45 @@ def test_spawn_exception_maps_to_launch_failed(
     assert "\x07" not in excinfo.value.detail
     assert locator.calls == 0  # failed spawn never reaches the HWND phase
     assert snapper.calls == 0
+
+
+def test_nonzero_exit_within_grace_maps_to_launch_failed(
+    tmp_path: Path, spawn: SimpleNamespace
+) -> None:
+    """A hand-off/crash that exits nonzero inside the grace window is an error."""
+    exe = _exe(tmp_path)
+    video = _video(tmp_path)
+    spawn.exit_code = 3
+    launcher = FileLauncher(FakeLocator([123]), FakeSnapper(), FakeConfig(str(exe)))
+
+    with pytest.raises(FileLaunchError) as excinfo:
+        asyncio.run(launcher.launch(str(video)))
+    assert excinfo.value.code == ERR_LAUNCH_FAILED
+    assert "code 3" in excinfo.value.detail
+
+
+def test_grace_timeout_keeps_player_alive_and_reaps_in_background(
+    tmp_path: Path, spawn: SimpleNamespace, monkeypatch: Any
+) -> None:
+    """A cold-started primary player outlives the grace window: launch proceeds
+    without waiting for it, and the process is reaped by a background thread —
+    never killed (the old blocking run terminated playback at its timeout)."""
+    exe = _exe(tmp_path)
+    video = _video(tmp_path)
+    monkeypatch.setattr(fl, "HANDOFF_GRACE_S", 0.01)
+    spawn.delay_s = 0.15  # the primary instance keeps running past the grace
+    locator = FakeLocator([321])
+    snapper = FakeSnapper()
+    launcher = FileLauncher(locator, snapper, FakeConfig(str(exe)))
+
+    result = asyncio.run(launcher.launch(str(video)))
+    assert result.launched is True
+    assert result.hwnd == 321
+    assert spawn.argvs == [[str(exe), str(video), "/fullscreen"]]
+    assert ("start", str(video)) in spawn.events
+    assert ("end", str(video)) not in spawn.events  # grace expired while running
+
+    deadline = time.monotonic() + 2.0
+    while ("end", str(video)) not in spawn.events and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ("end", str(video)) in spawn.events  # background reaper finished the wait

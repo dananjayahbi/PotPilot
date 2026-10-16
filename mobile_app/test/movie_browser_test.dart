@@ -1,23 +1,30 @@
 // Doc 45 test plan: in-app movie library browser.
 //
 // Fake `LibrarySocket` + fake telemetry only — no real network. Covers the
-// frozen `CMD_MEDIA` envelopes (paging offsets 0/200/…, rescans, launches),
-// the §4.1 correlation guard, the 200 ms search debounce, launch
-// confirmation/timeout flows, state rendering (empty/no-match/offline) and
-// the 30-entry filter+sort matrix.
+// frozen `CMD_MEDIA` envelopes (paging offsets 0/50/…, rescans, launches),
+// the §4.1 correlation guard, the 200 ms search debounce, relative-path
+// sectioning, thumbnails, launch confirmation/timeout flows, state rendering
+// (empty/no-match/offline) and the 30-entry filter+sort matrix.
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart' hide Action;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:potpilot_remote/core/theme/oled_theme.dart';
+import 'package:potpilot_remote/features/library/library_sections.dart';
 import 'package:potpilot_remote/features/library/movie_browser.dart';
+import 'package:potpilot_remote/features/library/thumbnail_cache.dart';
 import 'package:potpilot_remote/network/telemetry_provider.dart';
 import 'package:potpilot_remote/network/ws_client.dart';
 import 'package:potpilot_remote/network/ws_message_codec.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+/// Valid 1×1 PNG (base64) — the smallest decodable frame for thumb tests.
+const String _png1x1B64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 /// Fake Doc 31 transport: records every sent envelope and returns it
 /// id-preserved (the id-exact correlation path of §4.1).
@@ -102,6 +109,7 @@ Map<String, dynamic> _wireItem({
   int sizeBytes = 1000000000,
   int modifiedAt = 1760500000,
   bool hasSubs = false,
+  String? thumbnailB64,
 }) {
   return <String, dynamic>{
     'name': name,
@@ -109,6 +117,7 @@ Map<String, dynamic> _wireItem({
     'size_bytes': sizeBytes,
     'modified_at': modifiedAt,
     'has_subs': hasSubs,
+    if (thumbnailB64 != null) 'thumbnail_b64': thumbnailB64,
   };
 }
 
@@ -207,6 +216,7 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
+    libraryThumbnailCache.clear();
     socket = _FakeLibrarySocket();
     telemetrySocket = _FakeTelemetrySocket();
     telemetry = TelemetryNotifier(telemetrySocket);
@@ -364,6 +374,53 @@ void main() {
       expect(page.items.last.hasSrt, isFalse);
     });
 
+    test('MovieEntry parses the optional thumbnail_b64 and ties it to ==', () {
+      final Map<String, dynamic> base = _wireItem(name: 'Framed');
+      final MovieEntry withThumb =
+          MovieEntry.fromJson(<String, dynamic>{...base, 'thumbnail_b64': 'Zm9v'});
+      expect(withThumb.thumbnailB64, 'Zm9v');
+
+      final MovieEntry withoutThumb = MovieEntry.fromJson(
+        <String, dynamic>{...base}..remove('thumbnail_b64'),
+      );
+      expect(withoutThumb.thumbnailB64, isNull);
+      expect(withoutThumb == withThumb, isFalse); // thumb participates in ==
+      expect(
+        withoutThumb ==
+            MovieEntry.fromJson(<String, dynamic>{...base}),
+        isTrue,
+      );
+      expect(
+        withThumb.hashCode,
+        MovieEntry.fromJson(<String, dynamic>{...base, 'thumbnail_b64': 'Zm9v'})
+            .hashCode,
+      );
+    });
+
+    test('title matching accepts context prefixes but anchors separators', () {
+      final TelemetryState prefixed = TelemetryState.initial.copyWith(
+        isConnected: true,
+        durationMs: 60000,
+        fileTitle: 'Some Folder, Amélie (2001)',
+        extras: <String, Object?>{'potplayer_found': true},
+      );
+      expect(libraryNowPlaying(prefixed, 'Amélie (2001)'), isTrue);
+      expect(libraryNowPlaying(prefixed, 'Some Folder, Amélie (2001)'), isTrue);
+      // Anchoring: a stem suffix WITHOUT the separator must not match…
+      expect(libraryNowPlaying(prefixed, 'élie (2001)'), isFalse);
+      // …and neither must an unanchored tail like 'Weird_3' vs '3'.
+      expect(libraryTitleMatches('Folder, Weird_3', '3'), isFalse);
+      expect(libraryTitleMatches(r'D:\Movies\Film', 'Film'), isTrue);
+      expect(libraryTitleMatches('context, My, Movie', 'My, Movie'), isTrue);
+      expect(libraryTitleMatches('Other (1999)', 'Amélie (2001)'), isFalse);
+
+      final TelemetryState noPlayer = prefixed.copyWith(
+        extras: <String, Object?>{'potplayer_found': false},
+      );
+      expect(libraryNowPlaying(noPlayer, 'Amélie (2001)'), isFalse);
+      expect(libraryNowPlaying(TelemetryState.initial, 'Amélie (2001)'), isFalse);
+    });
+
     testWidgets('all six §5 envelopes validate against Doc 03 §5.1', (
       WidgetTester tester,
     ) async {
@@ -447,7 +504,7 @@ void main() {
   });
 
   group('paged full-index fetch (§4.2, AC1)', () {
-    testWidgets('500-file index pages offsets 0/200/400 with exact payloads',
+    testWidgets('500-file index pages offsets 0/50/…/450 with exact payloads',
         (WidgetTester tester) async {
       await pumpScreen(tester);
       expect(find.byKey(const Key('library_skeleton_grid')), findsOneWidget);
@@ -461,27 +518,28 @@ void main() {
               : 'D:\\Movies\\Movie ${i.toString().padLeft(3, '0')}.mkv',
         ),
       );
-      for (final int offset in <int>[0, 200, 400]) {
+      int replies = 0;
+      for (int offset = 0; offset < 500; offset += kLibraryPageSize) {
         expect(socket.last('LIST_MEDIA').payload, <String, dynamic>{
           'query': '',
           'offset': offset,
           'limit': kLibraryPageSize,
         });
-        await replyList(
-          tester,
-          total: 500,
-          items: all.sublist(offset, offset + 200 > 500 ? 500 : offset + 200),
-        );
+        final int end =
+            offset + kLibraryPageSize > 500 ? 500 : offset + kLibraryPageSize;
+        await replyList(tester, total: 500, items: all.sublist(offset, end));
+        replies++;
       }
 
       final LibraryNotifier notifier = notifierOf(tester);
       final List<MovieEntry> entries = notifier.state.requireValue;
       expect(entries, hasLength(500));
       expect(entries.first.title, 'Amélie (2001)'); // title-asc first
-      expect(socket.count('LIST_MEDIA'), 3); // exactly 3 pages, no extras
+      expect(socket.count('LIST_MEDIA'), replies); // exactly one per page
+      expect(replies, 10); // 500 files ÷ 50-per-page (thumbnail-safe cap)
       expect(
         socket.sent.where((WsMessage m) => m.type == typeCmdMedia),
-        hasLength(3),
+        hasLength(replies),
       );
       for (final WsMessage message in socket.sent) {
         expectValidEnvelope(message);
@@ -857,6 +915,211 @@ void main() {
     });
   });
 
+  group('relative-path sectioning for nested folders (§4.2)', () {
+    MovieEntry entry(String path) {
+      final String name = path.split(r'\').last;
+      return MovieEntry(
+        path: path,
+        title: name.substring(0, name.lastIndexOf('.')),
+        sizeBytes: 1,
+        modified: DateTime(2024, 1, 1),
+        hasSrt: false,
+      );
+    }
+
+    test('groups by directory relative to the deepest common ancestor', () {
+      final List<LibrarySection> sections = buildLibrarySections(<MovieEntry>[
+        entry(r'D:\Movies\Root.mkv'),
+        entry(r'D:\Movies\Action\1995\Heat.mkv'),
+        entry(r'D:\Movies\Action\Raid.mkv'),
+      ]);
+      expect(
+        sections.map((LibrarySection section) => section.heading).toList(),
+        <String>['Action', r'Action\1995', 'Movies'],
+      );
+      expect(sections[0].entries.single.title, 'Raid');
+      expect(sections[1].entries.single.title, 'Heat');
+      expect(sections[2].entries.single.title, 'Root');
+    });
+
+    test('one directory → one section headed by that directory\'s name', () {
+      final List<LibrarySection> sections = buildLibrarySections(<MovieEntry>[
+        entry(r'D:\Movies\A.mkv'),
+        entry(r'D:\Movies\B.mkv'),
+      ]);
+      expect(sections.single.heading, 'Movies');
+      expect(
+        sections.single.entries.map((MovieEntry e) => e.title).toList(),
+        <String>['A', 'B'], // incoming order preserved inside a section
+      );
+    });
+
+    test('mixed drives fall back to full directory headings', () {
+      final List<LibrarySection> sections = buildLibrarySections(<MovieEntry>[
+        entry(r'E:\Films\B.mkv'),
+        entry(r'D:\Movies\A.mkv'),
+      ]);
+      expect(
+        sections.map((LibrarySection section) => section.heading).toList(),
+        <String>[r'D:\Movies', r'E:\Films'],
+      );
+    });
+
+    test('empty input yields no sections', () {
+      expect(buildLibrarySections(const <MovieEntry>[]), isEmpty);
+    });
+
+    testWidgets('grid renders section headings above their grouped cards', (
+      WidgetTester tester,
+    ) async {
+      await pumpScreen(tester);
+      await loadIndex(
+        tester,
+        items: <Map<String, dynamic>>[
+          _wireItem(name: 'Raid', path: 'D:\\Movies\\Action\\Raid.mkv'),
+          _wireItem(name: 'Heat', path: 'D:\\Movies\\Action\\1995\\Heat.mkv'),
+          _wireItem(name: 'Root', path: 'D:\\Movies\\Root.mkv'),
+        ],
+      );
+
+      final Finder actionHeader =
+          find.byKey(const ValueKey<String>('library_section_Action'));
+      expect(actionHeader, findsOneWidget);
+      expect(
+        find.descendant(of: actionHeader, matching: find.text('Action')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: actionHeader, matching: find.text('1 title')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey<String>(
+            'library_card_D:\\Movies\\Action\\Raid.mkv')),
+        findsOneWidget,
+      );
+
+      final Finder gridScrollable = find.descendant(
+        of: find.byKey(const Key('library_grid')),
+        matching: find.byType(Scrollable),
+      );
+      final Finder nestedHeader =
+          find.byKey(const ValueKey<String>('library_section_Action\\1995'));
+      await tester.scrollUntilVisible(nestedHeader, 300,
+          scrollable: gridScrollable);
+      expect(nestedHeader, findsOneWidget);
+
+      final Finder rootHeader =
+          find.byKey(const ValueKey<String>('library_section_Movies'));
+      await tester.scrollUntilVisible(rootHeader, 300,
+          scrollable: gridScrollable);
+      expect(rootHeader, findsOneWidget);
+      expect(
+        find.byKey(const ValueKey<String>('library_card_D:\\Movies\\Root.mkv')),
+        findsOneWidget,
+      );
+    });
+  });
+
+  group('thumbnails (§4.2.5)', () {
+    testWidgets(
+        'cards render decoded frames, placeholders and broken-thumb fallbacks',
+        (WidgetTester tester) async {
+      await pumpScreen(tester);
+      await loadIndex(
+        tester,
+        items: <Map<String, dynamic>>[
+          _wireItem(
+            name: 'Framed',
+            path: 'D:\\Movies\\Framed.mkv',
+            thumbnailB64: _png1x1B64,
+          ),
+          _wireItem(name: 'Bare', path: 'D:\\Movies\\Bare.mkv'),
+          _wireItem(
+            name: 'Corrupt',
+            path: 'D:\\Movies\\Corrupt.mkv',
+            thumbnailB64: 'not*base64@!',
+          ),
+          _wireItem(
+            name: 'Garbage',
+            path: 'D:\\Movies\\Garbage.mkv',
+            thumbnailB64: base64Encode('definitely not an image'.codeUnits),
+          ),
+        ],
+      );
+
+      // No payload from the PC yet → placeholder while loading.
+      expect(
+        find.byKey(const ValueKey<String>(
+            'library_thumb_placeholder_D:\\Movies\\Bare.mkv')),
+        findsOneWidget,
+      );
+      // Undecodable base64 → immediate placeholder fallback.
+      expect(
+        find.byKey(const ValueKey<String>(
+            'library_thumb_placeholder_D:\\Movies\\Corrupt.mkv')),
+        findsOneWidget,
+      );
+
+      // Second row (Framed/Garbage) enters the viewport on scroll.
+      final Finder framedThumb =
+          find.byKey(const ValueKey<String>('library_thumb_D:\\Movies\\Framed.mkv'));
+      await tester.scrollUntilVisible(
+        framedThumb,
+        400,
+        scrollable: find.descendant(
+          of: find.byKey(const Key('library_grid')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      // Valid frame → decoded image.
+      expect(framedThumb, findsOneWidget);
+
+      // Valid base64 of a non-image → the Image error builder swaps in the
+      // placeholder once decoding fails.
+      await tester.pump(const Duration(milliseconds: 120));
+      await tester.pump();
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey<String>(
+            'library_thumb_placeholder_D:\\Movies\\Garbage.mkv')),
+        findsOneWidget,
+      );
+
+      expect(libraryThumbnailCache.length, greaterThanOrEqualTo(1));
+      expect(
+        libraryThumbnailCache.length,
+        lessThanOrEqualTo(kLibraryThumbnailCacheCapacity),
+      );
+    });
+
+    test('cache decodes once, serves cached bytes and bounds its size', () {
+      final LibraryThumbnailCache cache =
+          LibraryThumbnailCache(capacity: 2);
+      final Uint8List decoded = base64Decode(_png1x1B64);
+      expect(cache.thumbnailBytes(r'D:\a.mkv', _png1x1B64), decoded);
+      // Same payload → served from cache (entry touched, not re-decoded).
+      expect(cache.thumbnailBytes(r'D:\a.mkv', _png1x1B64), decoded);
+      expect(cache.length, 1);
+      // Null payload keeps the last good frame (PC omitted it this round).
+      expect(cache.thumbnailBytes(r'D:\a.mkv', null), decoded);
+      // Broken payload keeps the last good frame too.
+      expect(cache.thumbnailBytes(r'D:\a.mkv', '@@'), decoded);
+      // Capacity bound: two more entries evict the oldest.
+      cache.thumbnailBytes(r'D:\b.mkv', 'Yg==');
+      cache.thumbnailBytes(r'D:\c.mkv', 'Yw==');
+      expect(cache.length, 2);
+      expect(cache.thumbnailBytes(r'D:\a.mkv', _png1x1B64), decoded); // re-admits
+      expect(cache.length, 2);
+      cache.clear();
+      expect(cache.length, 0);
+      expect(
+        cache.thumbnailBytes(r'D:\a.mkv', null),
+        isNull, // cleared cache + no payload → placeholder state
+      );
+    });
+  });
+
   group('launch flow (§4.3, AC4/AC5)', () {
     testWidgets('tap launches exact unicode path; telemetry confirms', (
       WidgetTester tester,
@@ -954,7 +1217,57 @@ void main() {
       expect(find.byType(SnackBar), findsNothing);
     });
 
-    testWidgets('launch error 4005 → snackbar + auto refresh (§7)', (
+    testWidgets(
+        'started ack + live playback telemetry confirms while file_title lags',
+        (WidgetTester tester) async {
+      await pumpScreen(tester);
+      await loadIndex(
+        tester,
+        items: <Map<String, dynamic>>[_wireItem(name: 'Dune (2021)')],
+      );
+      await tester.tap(find.byKey(
+          const ValueKey<String>('library_card_D:\\Movies\\Dune (2021).mkv')));
+      await tester.pump();
+      socket.replyTo(socket.last('LAUNCH_MEDIA'), payload: <String, dynamic>{
+        'ok': true,
+        'started': true,
+      });
+      await tester.pump();
+      expect(find.text('Launching…'), findsOneWidget); // awaiting telemetry
+
+      // A telemetry tick with NO file_title yet: the route said started and
+      // the window reports a live player with media duration → confirmed.
+      await pushTelemetry(tester, fileTitle: null);
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.text('Launching…'), findsNothing); // optimistic UI released
+      expect(find.byType(SnackBar), findsNothing); // launch succeeded
+      expect(socket.count('LAUNCH_MEDIA'), 1);
+    });
+
+    testWidgets('no started flag and no telemetry → confirmation still fails', (
+      WidgetTester tester,
+    ) async {
+      await pumpScreen(tester);
+      await loadIndex(
+        tester,
+        items: <Map<String, dynamic>>[_wireItem(name: 'Tenet (2020)')],
+      );
+      await tester.tap(find.byKey(
+          const ValueKey<String>('library_card_D:\\Movies\\Tenet (2020).mkv')));
+      await tester.pump();
+      socket.replyTo(socket.last('LAUNCH_MEDIA'),
+          payload: <String, dynamic>{'ok': true}); // started absent
+      await tester.pump();
+      // Playback-active telemetry WITHOUT an ack `started` is not enough.
+      await pushTelemetry(tester, fileTitle: null);
+      await tester.pump(kLibraryConfirmTimeout);
+      await tester.pump();
+      expect(find.text('Launch not confirmed — check PotPlayer'), findsOneWidget);
+      await flushSnackbars(tester);
+      expect(find.byType(SnackBar), findsNothing);
+    });
+
+    testWidgets('launch error 4005 → snackbar, no automatic refresh (§7)', (
       WidgetTester tester,
     ) async {
       await pumpScreen(tester);
@@ -972,22 +1285,38 @@ void main() {
       );
       await tester.pump();
       expect(find.text('File not found on PC'), findsOneWidget);
-      expect(socket.count('RESCAN_MEDIA'), 1); // auto refresh(force:true)
+      expect(socket.count('RESCAN_MEDIA'), 0); // refreshing is strictly manual
+      expect(socket.count('LIST_MEDIA'), 1); // no silent re-query either
 
-      socket.replyTo(
-        socket.last('RESCAN_MEDIA'),
-        payload: <String, dynamic>{'ok': true, 'queued': true},
-      );
-      await tester.pump();
-      await tester.pump(kLibraryRescanRequeryDelay);
-      expect(socket.count('LIST_MEDIA'), 2);
-      await loadIndex(
-        tester,
-        items: <Map<String, dynamic>>[_wireItem(name: 'Ghost Film')], // gone
-      );
       await flushSnackbars(tester);
       expect(find.byType(SnackBar), findsNothing);
-      expect(find.text('Ghost Film'), findsOneWidget);
+      expect(find.text('Ghost Film'), findsOneWidget); // last-known cache kept
+    });
+
+    testWidgets('LAUNCH_MEDIA_RESULT ok:false maps E_FILE_NOT_FOUND to a notice', (
+      WidgetTester tester,
+    ) async {
+      await pumpScreen(tester);
+      await loadIndex(
+        tester,
+        items: <Map<String, dynamic>>[_wireItem(name: 'Gone Film')],
+      );
+      await tester.tap(find.byKey(
+          const ValueKey<String>('library_card_D:\\Movies\\Gone Film.mkv')));
+      await tester.pump();
+      // Domain failures ship as <ACTION>_RESULT {ok:false, error, detail} —
+      // the router only maps raised exceptions to _ERROR frames.
+      socket.replyTo(socket.last('LAUNCH_MEDIA'), payload: <String, dynamic>{
+        'ok': false,
+        'error': 'E_FILE_NOT_FOUND',
+        'detail': 'media file not found: D:\\Movies\\Gone Film.mkv',
+      });
+      await tester.pump();
+      expect(find.text('File not found on PC'), findsOneWidget);
+      expect(find.text('Launching…'), findsNothing); // card reverted
+      expect(socket.count('RESCAN_MEDIA'), 0); // no auto re-index
+      await flushSnackbars(tester);
+      expect(find.byType(SnackBar), findsNothing);
     });
 
     testWidgets('offline tap → immediate false + snackbar, no envelope', (
@@ -1013,8 +1342,9 @@ void main() {
   });
 
   group('state rendering (§7, AC7)', () {
-    testWidgets('offline initial load renders retry; reconnect auto-refetches',
-        (WidgetTester tester) async {
+    testWidgets('offline initial load renders retry; reconnect stays manual', (
+      WidgetTester tester,
+    ) async {
       socket = _FakeLibrarySocket(connected: false);
       overrides = <Override>[
         librarySocketProvider.overrideWithValue(socket),
@@ -1030,7 +1360,13 @@ void main() {
 
       socket.setConnected(true);
       await tester.pump();
-      expect(socket.count('RESCAN_MEDIA'), 1); // auto-refetch (§7)
+      expect(socket.count('RESCAN_MEDIA'), 0); // no auto-refetch on reconnect
+      expect(socket.count('LIST_MEDIA'), 0);
+
+      // Recovery is one explicit user action: the app-bar refresh button.
+      await tester.tap(find.byKey(const Key('library_refresh_button')));
+      await tester.pump();
+      expect(socket.count('RESCAN_MEDIA'), 1);
       socket.replyTo(
         socket.last('RESCAN_MEDIA'),
         payload: <String, dynamic>{'ok': true, 'queued': true},
@@ -1047,7 +1383,8 @@ void main() {
       expect(find.byKey(const Key('library_grid')), findsOneWidget);
     });
 
-    testWidgets('mid-session disconnect keeps list + banner, reconnect restores',
+    testWidgets(
+        'mid-session disconnect keeps list + banner; reconnect never auto-refreshes',
         (WidgetTester tester) async {
       await pumpScreen(tester);
       await loadIndex(
@@ -1061,18 +1398,28 @@ void main() {
 
       socket.setConnected(true);
       await tester.pump();
+      expect(find.text('Offline — retrying…'), findsNothing); // banner clears
+      expect(find.text('Kept Film'), findsOneWidget);
+      expect(socket.count('RESCAN_MEDIA'), 0); // strictly manual refreshing
+      expect(socket.count('LIST_MEDIA'), 1); // only the initial fetch ever ran
+
+      // The manual affordance still performs the full round-trip on demand.
+      await tester.tap(find.byKey(const Key('library_refresh_button')));
+      await tester.pump();
+      expect(socket.count('RESCAN_MEDIA'), 1);
       socket.replyTo(
         socket.last('RESCAN_MEDIA'),
         payload: <String, dynamic>{'ok': true, 'queued': true},
       );
       await tester.pump();
+      expect(find.text('Rescanning library…'), findsOneWidget);
       await tester.pump(kLibraryRescanRequeryDelay);
       await loadIndex(
         tester,
         items: <Map<String, dynamic>>[_wireItem(name: 'Kept Film')],
       );
-      expect(find.text('Offline — retrying…'), findsNothing);
-      expect(find.text('Kept Film'), findsOneWidget);
+      expect(socket.count('LIST_MEDIA'), 2);
+      expect(find.text('Rescanning library…'), findsNothing);
     });
   });
 

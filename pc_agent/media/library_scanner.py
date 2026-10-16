@@ -7,7 +7,10 @@ wire surface consumed by Doc 14: ``RESCAN_MEDIA`` queues a background walk and
 acks ``{"ok": true, "queued": true}``; ``LIST_MEDIA`` returns the frozen paged
 result ``{folders, items, total, offset, limit}`` with each item serialized as
 Doc 03 §5.5 ``{name, path, size_bytes, modified_at, has_subs}`` (internal
-``title``/``has_srt`` map to wire ``name``/``has_subs``).  Scan progress is
+``title``/``has_srt`` map to wire ``name``/``has_subs``) plus the optional
+Doc 45 ``thumbnail_b64`` enrichment attached by the wire handler
+(:mod:`pc_agent.media.thumb_cache`; absent until a frame is cached).  Scan
+progress is
 PC-side only — logged and offered to :meth:`LibraryScanner.on_progress`
 callbacks; Doc 03 defines no scan-progress frame, so nothing progress-shaped
 ever reaches the wire.
@@ -28,6 +31,8 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+from pc_agent.media.thumb_cache import ThumbCache
 
 if TYPE_CHECKING:
     from pc_agent.core.config_manager import ConfigManager
@@ -127,6 +132,7 @@ class LibraryScanner:
         self._progress_callbacks: list[ProgressCallback] = []
         self._last_progress_at: float | None = None
         self._now: Callable[[], float] = time.monotonic  # progress-gate seam
+        self._thumbs: ThumbCache | None = None  # lazy: only LIST_MEDIA needs it
 
     # -------------------------------------------------------------- scanning
 
@@ -491,12 +497,45 @@ class LibraryScanner:
         """``RESCAN_MEDIA``: queue a background walk and ack immediately (§5)."""
         del session, envelope
         self.queue_rescan()
+        self._warm_thumbs_after_scan()
         return {"queued": True}  # build_ack supplies ok:true
 
     async def handle_list_media(self, session: WsSession, envelope: WsEnvelope) -> dict[str, Any]:
-        """``LIST_MEDIA``: frozen paged result, or the E_BAD_PAYLOAD error payload (§5)."""
+        """``LIST_MEDIA``: paged result (+ optional ``thumbnail_b64``) or E_BAD_PAYLOAD (§5)."""
         del session
         try:
-            return self.list_media(envelope.payload)
+            result = self.list_media(envelope.payload)
         except ValueError as exc:
             return {"ok": False, "error": ERR_BAD_PAYLOAD, "detail": str(exc)}
+        # Thumbnail enrichment is best-effort and thread-offloaded: cache hits
+        # are cheap, at most ThumbCache.SYNC_BUDGET misses extract inline, the
+        # rest fill the cache in the background (placeholders until then).
+        thumbs = self._thumb_cache()
+        await asyncio.to_thread(thumbs.attach, result["items"])
+        return result
+
+    def _thumb_cache(self) -> ThumbCache:
+        """Lazily bind the Doc 20 thumbnail cache (created on first LIST_MEDIA)."""
+        if self._thumbs is None:
+            self._thumbs = ThumbCache(self._config)
+        return self._thumbs
+
+    def _warm_thumbs_after_scan(self) -> None:
+        """Queue thumbnail generation for the whole index once the queued scan lands.
+
+        No-ops until a ``LIST_MEDIA`` created the cache — direct
+        :meth:`rescan` callers (tests, dashboard) never start ffmpeg.
+        """
+        thumbs = self._thumbs
+        task = self._scan_task
+        if thumbs is None or task is None or task.done():
+            return
+
+        def _warm(completed: asyncio.Task[dict[str, Any]]) -> None:
+            if completed.cancelled() or completed.exception() is not None:
+                return
+            thumbs.request_many(
+                (entry.path, entry.modified_at) for entry in self._index
+            )
+
+        task.add_done_callback(_warm)

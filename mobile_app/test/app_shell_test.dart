@@ -1,8 +1,37 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:potpilot_remote/core/haptics/haptic_engine.dart';
+import 'package:potpilot_remote/core/theme/oled_theme.dart';
 import 'package:potpilot_remote/features/bed_mode/blind_gesture_pad.dart';
 import 'package:potpilot_remote/features/trackpad/virtual_trackpad.dart';
 import 'package:potpilot_remote/main.dart';
+import 'package:potpilot_remote/network/telemetry_provider.dart';
+import 'package:potpilot_remote/network/ws_client.dart';
+import 'package:potpilot_remote/network/ws_message_codec.dart';
+
+/// Fake telemetry socket — one `potplayer_found: false` frame pushed via
+/// `notifier.handleEnvelope` drives the deck's closed caption below the
+/// status-bar inset (same harness shape as the deck suites).
+class _FakeSocket implements TelemetrySocket {
+  final StreamController<WsMessage> _envelopes =
+      StreamController<WsMessage>.broadcast();
+  final StreamController<WsConnectionState> _states =
+      StreamController<WsConnectionState>.broadcast();
+
+  @override
+  Stream<WsMessage> get envelopes => _envelopes.stream;
+
+  @override
+  Stream<WsConnectionState> get stateChanges => _states.stream;
+
+  Future<void> close() async {
+    await _envelopes.close();
+    await _states.close();
+  }
+}
 
 /// Shell suite (Doc 05 section 9): 4 destinations in order, IndexedStack
 /// child switching with per-tab element retention, AppTab index alignment,
@@ -182,6 +211,80 @@ void main() {
 
       expect(find.byType(NavigationBar), findsOneWidget);
       expect(stackOf(tester).index, AppTab.deck.index);
+    },
+  );
+
+  testWidgets(
+    'deck closed caption renders below the status-bar inset while the '
+    'background stays full-bleed (shell top SafeArea)',
+    (WidgetTester tester) async {
+      // Status-bar / notch inset: content must clear it; the dark
+      // background keeps bleeding behind it (pad content, not paint).
+      // FakeViewPadding feeds the view in physical px — 48 logical at the
+      // default test DPR (3.0) is 144 physical.
+      tester.view.padding = FakeViewPadding(
+        top: 48 * tester.view.devicePixelRatio,
+      );
+      addTearDown(tester.view.reset);
+
+      final _FakeSocket socket = _FakeSocket();
+      addTearDown(socket.close);
+      final TelemetryNotifier notifier = TelemetryNotifier(socket);
+      notifier.bind();
+      notifier.handleEnvelope(
+        WsMessage(
+          id: '00000000-0000-4000-8000-000000000009',
+          type: typeTelemetrySync,
+          action: actionFullState,
+          payload: <String, dynamic>{
+            'position_ms': 0,
+            'duration_ms': 0,
+            'is_playing': false,
+            'potplayer_found': false,
+          },
+          // Future-second freshness (deck suites' convention): the
+          // staleness clock must not trip during the test run.
+          timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000 + 30,
+        ),
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: <Override>[
+            // Same wiring PotPilotApp applies at the composition root —
+            // the shell suite pumps AppShell under its own scope here.
+            hapticEngineProvider.overrideWith(
+              (Ref ref) => HapticEngine(preferences: null),
+            ),
+            telemetryProvider.overrideWith((ref) => notifier),
+          ],
+          child: MaterialApp(
+            theme: buildOledTheme(),
+            home: const AppShell(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final Finder caption = find.byKey(const Key('deck_closed_caption'));
+      expect(caption, findsOneWidget);
+      expect(
+        tester.getTopLeft(caption).dy,
+        greaterThanOrEqualTo(48.0),
+        reason: "'Pot player closed' must clear the status-bar/notch inset",
+      );
+
+      // The Scaffold still paints from y=0 — only children are padded.
+      expect(tester.getTopLeft(find.byType(Scaffold)).dy, 0.0);
+      final SafeArea safe = tester.widget<SafeArea>(
+        find.ancestor(of: caption, matching: find.byType(SafeArea)),
+      );
+      expect(safe.top, isTrue);
+      expect(
+        safe.bottom,
+        isFalse,
+        reason: 'bottom stays full-bleed; only top content is padded',
+      );
     },
   );
 }

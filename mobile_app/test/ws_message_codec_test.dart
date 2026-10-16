@@ -59,7 +59,7 @@ void main() {
   test('frozen constants match shared spec', () {
     expect(wsPort, 50506);
     expect(telemetryIntervalMs, 250);
-    expect(maxFrameBytes, 65536);
+    expect(maxFrameBytes, 2097152);
     expect(fullRefreshEveryTicks, 20);
     expect(mdnsServiceType, '_potpilot._tcp.local.');
     expect(greetingAction, 'AUTH_OK');

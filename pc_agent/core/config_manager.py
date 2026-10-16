@@ -207,10 +207,16 @@ class ConfigManager:
             return copy.deepcopy(self._config)
 
     def update(self, **changes: Any) -> AppConfig:
-        """Validate, persist, then notify listeners; unknown keys land in extras."""
+        """Validate, persist, then notify listeners; unknown keys land in extras.
+
+        Re-baselines from the on-disk file first (read-modify-write): keys not
+        passed here come from fresh disk state, so a stale in-memory snapshot —
+        e.g. another process wrote the file meanwhile — can never clobber them.
+        """
         with self._lock:
             if self._config is None:
                 self._load_locked()
+            self._rebaseline_from_disk_locked()
             known = {key: value for key, value in changes.items() if key in _KNOWN_KEYS}
             unknown = {key: value for key, value in changes.items() if key not in _KNOWN_KEYS}
             merged = {**self._as_dict(), **known}
@@ -319,6 +325,23 @@ class ConfigManager:
             "run_on_startup": self._config.run_on_startup,
             "minimize_to_tray": self._config.minimize_to_tray,
         }
+
+    def _rebaseline_from_disk_locked(self) -> None:
+        """Adopt the current on-disk snapshot; unreadable/missing file keeps memory.
+
+        Deliberately side-effect free: no quarantine, no migration write —
+        :meth:`_load_locked` owns those. Callers hold the lock.
+        """
+        path = self.config_path()
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return
+            raw = self._migrate_locked(raw)
+            config, extra = _build_config(raw)
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, ConfigError):
+            return
+        self._config, self._extra = config, extra
 
     def _load_locked(self) -> AppConfig:
         path = self.config_path()

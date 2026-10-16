@@ -290,6 +290,7 @@ async def run_agent(argv: list[str] | None = None) -> int:
         )
         from pc_agent.network.ws_server_router import WsRouter, WsServer
         from pc_agent.potplayer.hwnd_locator import PotPlayerLocator
+        from pc_agent.potplayer.seek_base import SeekBaseTracker
         from pc_agent.potplayer.telemetry_poller import TelemetryPoller
         from pc_agent.potplayer.wm_dispatcher import WmDispatcher
 
@@ -438,6 +439,7 @@ async def run_agent(argv: list[str] | None = None) -> int:
             return float(snapshot.speed) if snapshot is not None else 1.0
 
         dispatcher = WmDispatcher(locator, speed_provider=_speed_provider)
+        seek_tracker = SeekBaseTracker()  # rapid-tap SEEK_DELTA chaining
 
         def _scrub_sink(target_seconds: int) -> None:
             """UDP 0x04 scrub target (seconds) → Doc 09 absolute seek (ms)."""
@@ -506,7 +508,14 @@ async def run_agent(argv: list[str] | None = None) -> int:
                 elif action == Action.SEEK_DELTA:
                     snapshot = poller.latest
                     current = int(snapshot.position_ms) if snapshot is not None else 0
-                    result = dispatcher.seek_ms(current + int(payload["delta_ms"]))
+                    delta = int(payload["delta_ms"])
+                    # Rapid taps must chain off our own last delta target: the
+                    # snapshot can lag ~250 ms plus 500 ms position chunks, so
+                    # burst taps would otherwise re-seek the same stale base.
+                    target = max(0, seek_tracker.next_base(current) + delta)
+                    result = dispatcher.seek_ms(target)
+                    if result.ok:
+                        seek_tracker.record(target)
                 elif action == Action.SET_SPEED:
                     result = dispatcher.set_speed(float(payload["multiplier"]))
                 elif action == Action.FRAME_STEP:

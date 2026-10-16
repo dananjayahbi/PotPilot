@@ -9,7 +9,7 @@ import 'dart:math';
 
 const int wsPort = 50506;
 const int telemetryIntervalMs = 250;
-const int maxFrameBytes = 65536;
+const int maxFrameBytes = 2097152; // 2 MiB — one thumbnail-bearing LIST_MEDIA page
 const int fullRefreshEveryTicks = 20;
 const String mdnsServiceType = '_potpilot._tcp.local.';
 

@@ -2,14 +2,18 @@
 
 Owns the frozen ``CMD_MEDIA``/``LAUNCH_MEDIA`` wire surface dispatched by Doc 14:
 the request payload is exactly ``{"path": str}`` (Doc 03 §5.5 pins all flags off
-the wire) and the success response is exactly ``{"ok": true}`` — ``hwnd``,
-``snapped`` and ``elapsed_ms`` live only in the internal :class:`LaunchResult`
-and the module log.
+the wire) and the success response is exactly ``{"ok": true, "started": true}``
+— ``hwnd``, ``snapped`` and ``elapsed_ms`` live only in the internal
+:class:`LaunchResult` and the module log.  ``started`` tells the client the
+spawn/hand-off completed before the ack was sent (Doc 45 confirms the actual
+playback via telemetry).
 
 Pipeline (§4): validate the path against Doc 20's extension set → resolve the
 player exe (config ``potplayer_exe_path`` else ``DEFAULT_PLAYER_PATH``) → spawn
-``[exe, path, /fullscreen]`` via ``subprocess.run`` in a worker thread
-(single-instance hand-off makes a blocking run correct) → poll Doc 08's locator
+``[exe, path, /fullscreen]`` with ``subprocess.Popen`` in a worker thread and
+wait out the single-instance hand-off for at most ``HANDOFF_GRACE_S`` (a
+cold-started primary player outlives the grace window and is reaped by a
+background thread — it is never killed) → poll Doc 08's locator
 every ``HWND_POLL_INTERVAL_S`` until ``HWND_WAIT_TIMEOUT_S`` → Doc 11
 ``snap_to_primary()`` in a worker thread.  Every failure is a
 :class:`FileLaunchError` with a frozen ``E_*`` code; HWND timeout and snap
@@ -23,6 +27,7 @@ import asyncio
 import logging
 import os
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -46,6 +51,18 @@ FULLSCREEN_SWITCH: str = "/fullscreen"
 HWND_WAIT_TIMEOUT_S: float = 5.0
 HWND_POLL_INTERVAL_S: float = 0.1
 DEFAULT_PLAYER_PATH: str = r"C:\Program Files\DAUM\PotPlayer\PotPlayer64.exe"
+# Probed in order when no potplayer_exe_path is configured (§7): the 64-bit
+# default first, then the common 32-bit "Program Files (x86)" install layout.
+_DEFAULT_FALLBACK_PATHS: tuple[str, ...] = (
+    r"C:\Program Files\DAUM\PotPlayer\PotPlayerMini64.exe",
+    r"C:\Program Files (x86)\DAUM\PotPlayer\PotPlayerMini.exe",
+    r"C:\Program Files (x86)\DAUM\PotPlayer\PotPlayer64.exe",
+)
+
+
+def default_player_candidates() -> tuple[str, ...]:
+    """Config-absent probe order; ``DEFAULT_PLAYER_PATH`` first (patchable in tests)."""
+    return (DEFAULT_PLAYER_PATH, *_DEFAULT_FALLBACK_PATHS)
 ERR_FILE_NOT_FOUND: str = "E_FILE_NOT_FOUND"
 ERR_UNSUPPORTED_TYPE: str = "E_UNSUPPORTED_TYPE"
 ERR_PLAYER_NOT_FOUND: str = "E_PLAYER_NOT_FOUND"
@@ -53,7 +70,7 @@ ERR_LAUNCH_FAILED: str = "E_LAUNCH_FAILED"
 ERR_BAD_PAYLOAD: str = "E_BAD_PAYLOAD"
 
 PLAYER_PATH_KEY: str = "potplayer_exe_path"  # Doc 26 additive config key (A2)
-SPAWN_TIMEOUT_S: int = 10
+HANDOFF_GRACE_S: float = 1.0  # bound on waiting for the single-instance hand-off
 
 # §4 State: concurrent launches serialize here — never two subprocess/HWND
 # sequences interleaved.  Created at import (no loop binding since 3.10).
@@ -83,6 +100,31 @@ class LaunchResult:
 def _sanitize_detail(message: str) -> str:
     """Strip control characters so error details stay single-line wire-safe (§7)."""
     return "".join(char for char in message if char.isprintable())
+
+
+def _spawn_player(argv: list[str]) -> None:
+    """Spawn the player and wait out the single-instance hand-off (§4.3).
+
+    Runs in a worker thread.  A secondary instance that forwards the file to
+    the running primary exits on its own — a normal exit within the grace
+    window ends the wait; a cold-started primary outlives it and is reaped by
+    a background thread (never killed).  A nonzero exit inside the grace window
+    means the hand-off/spawn itself failed → :class:`FileLaunchError`.
+    """
+    proc = subprocess.Popen(argv)
+    try:
+        returncode = proc.wait(timeout=HANDOFF_GRACE_S)
+    except subprocess.TimeoutExpired:
+        # Primary instance still running (or a slow hand-off): reap in the
+        # background so the process handle never leaks.
+        threading.Thread(
+            target=proc.wait, name="potpilot-player-reap", daemon=True
+        ).start()
+        return
+    if returncode not in (0, None):
+        raise FileLaunchError(
+            ERR_LAUNCH_FAILED, f"player exited with code {returncode}"
+        )
 
 
 class FileLauncher:
@@ -130,15 +172,29 @@ class FileLauncher:
         return None
 
     def resolve_player_exe(self) -> str:
-        """Config ``potplayer_exe_path`` else ``DEFAULT_PLAYER_PATH``; missing → E_PLAYER_NOT_FOUND.
+        """Config ``potplayer_exe_path`` else the first existing default candidate.
 
-        A configured-but-wrong path deliberately does **not** fall back to the
+        A configured-but-wrong path deliberately does **not** fall back to a
         default — §7 requires the error so Doc 24 can prompt the user to fix it.
+        With no config key, known install layouts are probed (64-bit default,
+        then the x86 install) so fresh installs resolve without setup.
         """
-        candidate = self._configured_player() or DEFAULT_PLAYER_PATH
-        if os.path.isfile(candidate):
-            return candidate
-        raise FileLaunchError(ERR_PLAYER_NOT_FOUND, f"player executable not found: {candidate}")
+        configured = self._configured_player()
+        if configured is not None:
+            if os.path.isfile(configured):
+                return configured
+            raise FileLaunchError(
+                ERR_PLAYER_NOT_FOUND, f"player executable not found: {configured}"
+            )
+        tried: list[str] = []
+        for candidate in default_player_candidates():
+            if os.path.isfile(candidate):
+                return candidate
+            tried.append(candidate)
+        raise FileLaunchError(
+            ERR_PLAYER_NOT_FOUND,
+            "player executable not found: " + ", ".join(tried),
+        )
 
     # -------------------------------------------------------------- pipeline
 
@@ -169,7 +225,9 @@ class FileLauncher:
         async with _launch_lock:
             argv = [exe, normalized, FULLSCREEN_SWITCH]
             try:
-                await asyncio.to_thread(subprocess.run, argv, timeout=SPAWN_TIMEOUT_S)
+                await asyncio.to_thread(_spawn_player, argv)
+            except FileLaunchError:
+                raise
             except Exception as exc:
                 detail = _sanitize_detail(str(exc)) or type(exc).__name__
                 raise FileLaunchError(ERR_LAUNCH_FAILED, detail) from exc
@@ -222,10 +280,10 @@ class FileLauncher:
     async def handle_launch_media(
         self, session: WsSession, envelope: WsEnvelope
     ) -> dict[str, Any]:
-        """``LAUNCH_MEDIA``: ``{"ok": true}`` or frozen ``{"ok": false, error, detail}`` (§5)."""
+        """``LAUNCH_MEDIA``: ``{"ok": true, "started": true}`` or frozen error payload (§5)."""
         del session
         try:
             await self.launch(envelope.payload.get("path"))
         except FileLaunchError as exc:
             return {"ok": False, "error": exc.code, "detail": exc.detail}
-        return {}  # build_ack supplies ok:true — the only wire field
+        return {"started": True}  # build_ack supplies ok:true

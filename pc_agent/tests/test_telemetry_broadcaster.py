@@ -13,6 +13,7 @@ from pc_agent.network.telemetry_broadcaster import (
     TYPE_TELEMETRY,
     TelemetryBroadcaster,
     snapshot_to_payload,
+    title_from_window,
 )
 
 UUID4_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
@@ -314,14 +315,86 @@ def test_snapshot_to_payload_shapes() -> None:
     snap = snapshot_to_payload(
         SimpleNamespace(
             position_ms=5, duration_ms=9, is_playing=False, speed=2.0, volume=1, hwnd=7
-        )
+        ),
+        title_reader=lambda _hwnd: "",  # deterministic idle title (no live Win32 read)
     )
     assert snap["potplayer_found"] is True  # derived from hwnd when not explicit
-    assert snap["file_title"] is None
+    assert snap["file_title"] is None  # idle window → no media title
     as_dict = snapshot_to_payload({"position_ms": 3, "potplayer_found": True})
     assert as_dict["position_ms"] == 3
     assert as_dict["potplayer_found"] is True
     assert as_dict["duration_ms"] == 0
+
+
+def test_file_title_derived_from_live_window_title() -> None:
+    """Doc 33's confirmation key is populated from the media-carrying PotPlayer
+    window title (the poller snapshot itself carries no title source)."""
+    snapshot = SimpleNamespace(
+        position_ms=1,
+        duration_ms=100,
+        is_playing=True,
+        speed=1.0,
+        volume=50,
+        hwnd=42,
+        healthy=True,
+    )
+    calls: list[int] = []
+
+    def reader(hwnd: int) -> str:
+        calls.append(hwnd)
+        return "Inception (2010).mkv - PotPlayer"
+
+    payload = snapshot_to_payload(snapshot, title_reader=reader)
+    assert payload["file_title"] == "Inception (2010)"  # scanner-style stem
+    assert calls == [42]  # exactly one cheap GetWindowText per payload build
+
+    # Unhealthy snapshot: no window read at all — the wire value stays null.
+    degraded = SimpleNamespace(**{**vars(snapshot), "healthy": False})
+    assert snapshot_to_payload(degraded, title_reader=reader)["file_title"] is None
+    assert calls == [42]
+
+    # Explicit snapshot value (a title-carrying poller) always wins.
+    explicit = SimpleNamespace(**{**vars(snapshot), "file_title": "explicit"})
+    assert snapshot_to_payload(explicit, title_reader=reader)["file_title"] == "explicit"
+
+    # potplayer_found:false / no hwnd → nothing to read.
+    missing = SimpleNamespace(**{**vars(snapshot), "hwnd": 0, "potplayer_found": False})
+    assert snapshot_to_payload(missing, title_reader=reader)["file_title"] is None
+    assert calls == [42]
+
+
+def test_title_from_window_parsing() -> None:
+    assert title_from_window("Inception (2010).mkv - PotPlayer") == "Inception (2010)"
+    assert title_from_window("Movie.2010.1080p.mkv - PotPlayer64") == "Movie.2010.1080p"
+    assert title_from_window("D:\\Movies\\Film.webm - PotPlayer") == "Film"
+    assert title_from_window("Movie.2010 - PotPlayer") == "Movie.2010"  # no known ext → keep
+    # Context-prefixed window titles keep their prefix (the client anchors the
+    # stem): "folder, Film.mkv - PotPlayer" → "folder, Film".
+    assert title_from_window("Some Folder, Film.mp4 - PotPlayer") == "Some Folder, Film"
+    assert title_from_window("PotPlayer") is None  # bare empty instance
+    assert title_from_window("potplayer64") is None
+    assert title_from_window(" - PotPlayer") is None
+    assert title_from_window("") is None
+    assert title_from_window("   ") is None
+
+
+def test_broadcaster_broadcasts_derived_file_title() -> None:
+    async def scenario() -> list[dict[str, Any]]:
+        poller = FakePoller()
+        poller.latest.file_title = None  # poller has no title source of its own
+        broadcaster = TelemetryBroadcaster(
+            poller, interval_ms=10, title_reader=lambda _hwnd: "New Film.mkv - PotPlayer"
+        )
+        await broadcaster.start()
+        ws = FakeWs()
+        broadcaster.register_client(ws)
+        await wait_until(lambda: ws.frames)
+        state = await broadcaster._collect_state()  # noqa: SLF001 - direct seam check
+        await broadcaster.stop()
+        return [state]
+
+    state = asyncio.run(scenario())[0]
+    assert state["file_title"] == "New Film"  # end-to-end: snapshot → reader → wire key
 
 
 def test_frame_ids_are_fresh_uuid4() -> None:

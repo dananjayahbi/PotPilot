@@ -536,6 +536,12 @@ def test_potplayer_adapter_payloads_and_failures(wired) -> None:
     assert dispatcher.calls[-1] == ("seek_ms", 1_500)
     assert dispatcher.speed_provider() == 1.25
 
+    # Back-to-back taps chain off the previous delta target, NOT the (stale)
+    # snapshot — rapid-tap regression (user: "starts again where we start tapping").
+    reply = _dispatch(router, "CMD_POTPLAYER", "SEEK_DELTA", {"delta_ms": 500})
+    assert dispatcher.calls[-1] == ("seek_ms", 2_000)
+    assert reply["payload"] == {"ok": True}
+
 
 def test_cmd_key_adapter_validates_payloads(wired, monkeypatch) -> None:
     router = wired.record.ws_kwargs["router"]
@@ -660,9 +666,26 @@ def test_tray_actions_are_wired_to_seams(wired, monkeypatch) -> None:
     assert callable(actions.exit_app)
 
 
-def test_tray_icon_factory_falls_back_when_asset_missing(wired) -> None:
+def test_tray_icon_factory_falls_back_when_asset_missing(wired, monkeypatch) -> None:
+    # Simulate the asset being absent (it now ships) by hiding it from the
+    # factory's candidate probe — the fallback path must still raise.
+    original_is_file = Path.is_file
+
+    def _is_file_without_icon(self: Path) -> bool:
+        if self.name == "potpilot_icon.ico":
+            return False
+        return original_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", _is_file_without_icon)
     with pytest.raises(FileNotFoundError):
         wired.record.tray_icon_factory()
+
+
+def test_tray_icon_factory_loads_shipped_asset(wired) -> None:
+    # The shipped potpilot_icon.ico must parse and reach the 32 px tray size.
+    image = wired.record.tray_icon_factory()
+    assert image.size == (32, 32)
+    assert image.mode == "RGBA"
 
 
 def test_minimized_flag_starts_dashboard_hidden(monkeypatch, tmp_path) -> None:

@@ -183,7 +183,17 @@ class _AppShellState extends State<AppShell> {
     }
     return Column(
       children: <Widget>[
-        Expanded(child: tabs),
+        // Top inset only: tab content clears the status bar / notch while
+        // the Scaffold keeps painting full-bleed behind it (SafeArea pads
+        // children, never the background — the OLED look stays). Bed Mode
+        // returns above this Column and keeps its immersive canvas.
+        Expanded(
+          child: SafeArea(
+            top: true,
+            bottom: false,
+            child: tabs,
+          ),
+        ),
         NavigationBar(
           selectedIndex: _index,
           onDestinationSelected: _onDestinationSelected,

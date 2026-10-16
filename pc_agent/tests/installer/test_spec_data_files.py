@@ -85,11 +85,15 @@ def test_icon_and_assets_included_when_asset_exists(monkeypatch, tmp_path) -> No
     assert not any(dest == "shared_specs" for _src, dest in datas)
 
 
-def test_icon_absent_falls_back_to_none(monkeypatch) -> None:
-    result = _exec_spec(monkeypatch, SPEC_PATH.parent)
+def test_icon_absent_falls_back_to_none(monkeypatch, tmp_path) -> None:
+    # Synthetic repo root WITHOUT an assets dir — the shipped asset must not be
+    # assumed absent (pc_agent/assets/potpilot_icon.ico now exists).
+    spec_dir = tmp_path / "installer"
+    spec_dir.mkdir()
+    result = _exec_spec(monkeypatch, spec_dir)
     assert result.namespace["icon_or_none"]() is None
     datas = result.namespace["data_files"]()
-    assert not any(dest == "assets" for _src, dest in datas)  # pc_agent/assets absent
+    assert not any(dest == "assets" for _src, dest in datas)  # assets dir absent
 
 
 def test_onefile_and_onedir_topologies_both_build(monkeypatch) -> None:
