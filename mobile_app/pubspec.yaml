@@ -1,0 +1,30 @@
+name: potpilot_remote
+description: PotPilot Android remote - bedroom controller for PotPlayer.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=3.5.0"
+
+# Frozen core dependency set (Doc 05 section 6.1) - no other runtime deps.
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.1
+  web_socket_channel: ^3.0.0
+  mobile_scanner: ^5.2.0
+  phone_state: ^3.0.1
+  vibration: ^2.0.0
+  shared_preferences: ^2.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  # Doc 46 on-device benchmark/smoke drivers (mobile_app/integration_test/).
+  integration_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

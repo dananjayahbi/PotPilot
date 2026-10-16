@@ -1,0 +1,13 @@
+# Lint contract: Doc 01 section 4.5 (implemented by Doc 05).
+analyzer:
+  exclude:
+    - build/**
+    - android/**
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    prefer_single_quotes: true
+    always_declare_return_types: true
+    avoid_print: true
+    lines_longer_than_80_chars: false

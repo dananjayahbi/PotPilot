@@ -1,0 +1,168 @@
+# Doc 36: PotPlayer Remote Deck Grid
+
+> Part of PotPilot plan-series · Category G · Session 2 Wave 2.A · Flutter App
+
+## 1. Purpose & Scope
+**Delivers** `potplayer_deck.dart` — the dedicated PotPlayer remote grid rendered as the app's primary control tab: a large centered **Play/Pause** toggle, seek keys **−5s / +5s / −30s / +30s**, speed keys **−0.1x / Reset 1.0x / +0.1x**, **Next/Prev Frame**, **Fullscreen** toggle, and **Aspect Ratio** cycle. All keys dispatch guaranteed-delivery WebSocket `CMD_POTPLAYER` commands and give instant optimistic feedback, reconciled by 250 ms telemetry.
+
+**Out of scope:**
+- Timeline scrubber and speed/volume OSD badges → [38_flutter_live_scrub_bar_speed_hud.md](38_flutter_live_scrub_bar_speed_hud.md) (deck may embed its widget as a header, but owns neither its logic nor its file)
+- PC keyboard overlay → [37_flutter_full_pc_keyboard_sheet.md](37_flutter_full_pc_keyboard_sheet.md); audio/subtitle sheet → [39_flutter_audio_subtitle_sync_modal.md](39_flutter_audio_subtitle_sync_modal.md); monitor/power drawer → [40_flutter_multi_monitor_power_sheet.md](40_flutter_multi_monitor_power_sheet.md)
+- Blind-mode gesture control → [41_flutter_blind_bed_mode_gestures.md](41_flutter_blind_bed_mode_gestures.md)
+- PC-side `WM_COMMAND` codes and speed range enforcement → [09_potplayer_wm_command_dispatcher.md](09_potplayer_wm_command_dispatcher.md)
+- Tab/navigation hosting of the deck in `mobile_app/lib/main.dart` → Session 3 master-shell wiring
+
+## 2. File Ownership
+**Creates (create-only):**
+- `mobile_app/lib/features/deck/potplayer_deck.dart`
+
+**Reads / integrates (owned by other docs):**
+- `mobile_app/lib/network/telemetry_provider.dart` — Doc 33: `TelemetryState` fields `isPlaying`, `speed`, `durationMs`, `fileTitle`, `isConnected`, plus staleness clock, drive glyphs, badge text, and key gating
+- `mobile_app/lib/network/ws_client.dart` — Doc 31: `WsClient.send(type, action, payload)` + connected flag for disabling keys
+- `mobile_app/lib/core/theme/oled_theme.dart` — Doc 29: `#000000` background, night-vision accent tokens
+- `mobile_app/lib/core/haptics/haptic_engine.dart` — Doc 42: tap tick, play/pause thud, speed-reset double-tick
+- `mobile_app/lib/features/hud/scrub_speed_hud.dart` — Doc 38: optional embedded `ScrubSpeedHud` header widget
+- `mobile_app/pubspec.yaml` — Doc 05: `flutter_riverpod` dependency
+
+## 3. Public Contract
+```dart
+/// Every dispatchable deck key. Wire mapping lives in §5.
+enum DeckAction {
+  playPause, seekBack5, seekFwd5, seekBack30, seekFwd30,
+  speedDown, speedReset, speedUp, framePrev, frameNext,
+  fullscreen, aspectCycle,
+}
+
+/// Immutable declarative spec for one grid cell (glyph/label, action, column span, gating rule).
+class DeckKeySpec {
+  const DeckKeySpec({required this.action, required this.label,
+    required this.span, this.requiresMedia});
+}
+
+/// Root deck widget: consumes TelemetryNotifier (Doc 33), hosts optional HUD header + DeckGrid.
+class PotPlayerDeck extends ConsumerWidget {
+  const PotPlayerDeck({super.key});
+}
+
+/// Responsive N-column grid materialising a fixed [DeckKeySpec] table.
+class DeckGrid extends StatelessWidget {
+  const DeckGrid({super.key, required this.specs, required this.onTap});
+  final List<DeckKeySpec> specs;
+  final ValueChanged<DeckAction> onTap;
+}
+
+/// Single tactile key: OLED rest/pressed states, disabled styling, haptic tick on tap.
+class DeckButton extends StatelessWidget {
+  const DeckButton({super.key, required this.spec, required this.enabled,
+    required this.onPressed});
+}
+
+/// Payload builder + dispatch gate for one deck action (WS only, no UDP).
+class PotPlayerDeckController {
+  /// Maps [action] to the Doc 03 frozen registry envelope and sends via Doc 31
+  /// `WsClient.send("CMD_POTPLAYER", action, payload)`; reads [state] for speed math.
+  Future<void> dispatch(DeckAction action, TelemetryState state);
+  /// Returns current ± [delta] rounded to 0.1 and clamped to PotPlayer's 0.2x–4.0x range
+  /// (SET_SPEED always carries an absolute `multiplier` per Doc 03).
+  double stepSpeed(double current, double delta);
+}
+```
+
+## 4. Internal Design
+1. **Declarative key table:** module-level `const List<List<DeckKeySpec>> deckRows` defines 4 rows: transport row (Play/Pause spans 2), seek row (`−30s −5s +5s +30s`), speed row (`−0.1x 1.0x +0.1x`), utility row (`⏮ ⏭ ⛶ Aspect`). Rendering is pure data → widget; no hand-placed buttons.
+2. **Tap pipeline:** `onTap` → per-action 80 ms debounce (last-tap-wins) → haptic (Doc 42 pattern per action) → build payload from current telemetry state → `WsClient.send("CMD_POTPLAYER", action, payload)` (Doc 31) → optimistic local update.
+3. **Speed arithmetic:** `stepSpeed` computes `((current + delta) * 10).roundToDouble() / 10` then `clamp(0.2, 4.0)` — integer-tenth math avoids `0.30000000000000004` drift. Doc 03's `SET_SPEED` carries an **absolute** `multiplier`, so the controller always computes `current ± 0.1` (or `1.0` for reset) from the latest `TelemetryState.speed` and sends that value.
+4. **Optimistic play-state flip:** `playPause` flips a local `assumedPlaying` flag immediately (glyph changes in the same frame); the next `TELEMETRY_SYNC` (≤250 ms, wire `is_playing`) overwrites it — telemetry always wins on mismatch.
+5. **Gating:** keys with `requiresMedia: true` (seek ×4, frame ×2) render disabled when `durationMs <= 0` (wire `duration_ms`, −1/0 = none). `fullscreen`/`aspectCycle` remain enabled without media (PotPlayer window exists regardless). Speed keys disable when `speed` is unknown, when `potplayer_running` is false, or when the computed multiplier would equal the current one (already at 0.2x/4.0x bound).
+6. **Staleness:** if the age of the last accepted telemetry `timestamp` (Doc 33 staleness clock) exceeds 1000 ms, the grid renders at 50 % opacity and `playPause` dispatches but the glyph holds the last known state.
+
+```mermaid
+flowchart LR
+  T[DeckButton tap] --> D[80ms debounce]
+  D --> H[HapticEngine 42]
+  H --> P[Build payload from TelemetryState 33]
+  P --> W[WsClient 31 send CMD_POTPLAYER]
+  W --> PC[WS :50506 router 14]
+  PC --> WM[WM_COMMAND dispatcher 09]
+  TELEMETRY_SYNC 250ms -.reconciles glyphs.-> T
+```
+
+**Layout spec (portrait, 4 columns, 8 dp gutters):**
+
+| Row | Cells (span) | Height |
+|---|---|---|
+| 0 | file-title caption strip (single line, ellipsised) | 24 dp |
+| 1 | Play/Pause (2) + Speed badge (2, read-only from HUD or label) | 88 dp |
+| 2 | −30s (1) −5s (1) +5s (1) +30s (1) | 64 dp |
+| 3 | −0.1x (1) 1.0x (1) +0.1x (1) — speed row | 56 dp |
+| 4 | ⏮ Frame (1) ⏭ Frame (1) ⛶ Fullscreen (1) Aspect (1) | 56 dp |
+
+**Haptic mapping (via Doc 42, one per successful dispatch):**
+
+| Action group | Pattern |
+|---|---|
+| `playPause` | `play(heavyThud)` |
+| `seekBack*/seekFwd*` | `play(microTick)` |
+| `speedDown/speedUp` | `play(microTick)` |
+| `speedReset` | `play(doubleTick)` |
+| `frame*/fullscreen/aspectCycle` | `play(microTick)` |
+| disabled key pressed | nothing (silent reject) |
+
+## 5. Protocol & Data Compliance
+Action catalog is the frozen registry in [03_websocket_json_schema_spec.md](03_websocket_json_schema_spec.md) §5.3 (envelope fields `id/type/action/payload/timestamp` per overview §4.2); this doc **consumes** exactly:
+
+| On-screen control | WS `type` | `action` | `payload` |
+|---|---|---|---|
+| Play/Pause | `CMD_POTPLAYER` | `PLAY_PAUSE` | `{}` |
+| −5s / +5s | `CMD_POTPLAYER` | `SEEK_DELTA` | `{"delta_ms": -5000}` / `{"delta_ms": 5000}` |
+| −30s / +30s | `CMD_POTPLAYER` | `SEEK_DELTA` | `{"delta_ms": -30000}` / `{"delta_ms": 30000}` |
+| Speed −0.1x / +0.1x | `CMD_POTPLAYER` | `SET_SPEED` | `{"multiplier": <computed, e.g. 0.9 / 1.5>}` |
+| Speed Reset 1.0x | `CMD_POTPLAYER` | `SET_SPEED` | `{"multiplier": 1.0}` |
+| Prev / Next Frame | `CMD_POTPLAYER` | `FRAME_STEP` | `{"direction": "BACKWARD"}` / `{"direction": "FORWARD"}` |
+| Fullscreen | `CMD_POTPLAYER` | `TOGGLE_FULLSCREEN` | `{}` |
+| Aspect Ratio cycle | `CMD_POTPLAYER` | `CYCLE_ASPECT_RATIO` | `{}` |
+
+**TELEMETRY_SYNC fields rendered (wire names, Doc 03 §5.6):** `is_playing` → `TelemetryState.isPlaying` (glyph ▶/⏸), `speed` (speed badge + step base, format `1.4x`), `duration_ms` (media gating; −1 = none), `file_title` (deck header), `potplayer_running` (whole-grid kill switch), `timestamp`/Doc 33 staleness clock (dimming).
+
+## 6. Dependencies & Integration Points
+- **Action catalog / envelope:** [03_websocket_json_schema_spec.md](03_websocket_json_schema_spec.md) — §5 table matches its frozen registry verbatim
+- **Telemetry state:** [33_flutter_telemetry_state_provider.md](33_flutter_telemetry_state_provider.md) — `TelemetryState` consumed read-only
+- **Command sender:** [31_flutter_websocket_client_reconnect.md](31_flutter_websocket_client_reconnect.md) — `WsClient.send("CMD_POTPLAYER", action, payload)` + connection status
+- **Haptics:** [42_flutter_haptic_feedback_engine.md](42_flutter_haptic_feedback_engine.md) — `HapticEngine.play(HapticPattern.heavyThud | microTick | doubleTick)`
+- **Theme:** [29_flutter_oled_theme_design_system.md](29_flutter_oled_theme_design_system.md) — color/typography tokens only
+- **Embedded HUD (optional):** [38_flutter_live_scrub_bar_speed_hud.md](38_flutter_live_scrub_bar_speed_hud.md)
+- **PC side:** [14_pc_websocket_server_router.md](14_pc_websocket_server_router.md) → [09_potplayer_wm_command_dispatcher.md](09_potplayer_wm_command_dispatcher.md)
+- **External packages:** `flutter_riverpod` (ConsumerWidget/StateNotifier wiring); `vibration` used indirectly via Doc 42. No other packages.
+
+## 7. Edge Cases & Failure Handling
+- **WS reconnecting / offline (Doc 31 state ≠ connected):** grid renders disabled with a thin crimson "reconnecting" strip; no dispatch attempts (no client-side queueing — avoids stale play/pause after reconnect).
+- **Telemetry stale (>1000 ms):** dim grid to 50 %, hold last glyph; speed keys disable (computed `multiplier` needs a known base); seeks still allowed if media was known (position-independent deltas). `potplayer_running == false` disables the whole grid with a "PotPlayer closed" caption.
+- **Speed at bounds (0.2x / 4.0x):** the bound-adjacent key renders disabled — `stepSpeed` would return the current value, so no clamped no-op dispatch leaves the client.
+- **Rapid double-taps:** 80 ms debounce per action id; `playPause` last-tap-wins so a double tap ends paused once, not twice-plus.
+- **Zero-duration / no media (`duration_ms <= 0`):** seek and frame keys disabled; `PLAY_PAUSE`, fullscreen, aspect still dispatch (agent no-ops safely if no file loaded).
+- **Optimistic mismatch:** if telemetry reports the opposite `is_playing` after 250 ms, glyph snaps back (telemetry authoritative); no retry loop.
+- **`_ERROR` reply:** Doc 03 replies `PLAY_PAUSE_ERROR` etc. on the correlation id — deck ignores bodies (all actions are idempotent-safe no-ops on the PC side) but logs; UI stays optimistic until telemetry corrects it.
+- **Floating-point display:** speed always formatted via `(speed * 10).round() / 10` → single decimal (`1.4x`, never `1.4000000000000001`).
+
+## 8. Acceptance Criteria
+- [ ] Tapping Play/Pause flips the glyph same-frame and emits exactly one `CMD_POTPLAYER`/`PLAY_PAUSE` envelope with fresh uuid id.
+- [ ] ±5s and ±30s keys emit `SEEK_DELTA` with `delta_ms` exactly `∓5000` / `∓30000` (frozen Doc 03 payload) and are reconciled with PotPlayer (background window) in manual test.
+- [ ] Speed keys send absolute `multiplier` values on the 0.1 grid, never outside 0.2–4.0, and Reset sends `{"multiplier": 1.0}` + Doc 42 `doubleTick` haptic.
+- [ ] Frame step, Fullscreen, Aspect each dispatch their distinct action from §5 and work while PotPlayer is unfocused.
+- [ ] Seek/Frame keys visually disabled when `durationMs <= 0`; speed keys disabled when `speed == null`; whole grid dimmed when telemetry age > 1000 ms or WS not connected.
+- [ ] All surfaces use Doc 29 tokens on `#000000` (no glare-white fills); layout fits 360×800 dp without scrolling at default text scale.
+- [ ] `flutter analyze` clean; all widget tests green.
+
+## 9. Test Plan
+- **`mobile_app/test/features/deck/potplayer_deck_test.dart`** (widget): pumps `PotPlayerDeck` with a fake `TelemetryNotifier`; for each of the 12 keys asserts exactly one captured command with the §5 `type/action/payload`; asserts seek/frame keys are `offstage`-disabled at `durationMs: 0`; asserts play glyph flips before any telemetry arrives.
+- **`mobile_app/test/features/deck/deck_controller_test.dart`** (unit): `stepSpeed` cases — `1.0 + 0.1 → 1.1`, `4.0 + 0.1 → 4.0`, `0.2 − 0.1 → 0.2`, `1.35` display rounding, repeated ±0.1 ×30 stays on the 0.1 grid; `SET_SPEED` payload carries the absolute `multiplier`; debounce: two taps within 80 ms → one send.
+- **`mobile_app/test/features/deck/deck_staleness_test.dart`** (widget): stale snapshot (age 1500 ms) → 50 % opacity + `speed == null` disables speed row.
+- **Manual:** pair phone → hold Play/Pause while PotPlayer is behind other windows → playback toggles; kill agent → grid dims within 1 s and emits nothing; toggle play twice quickly → single effective toggle.
+
+## 10. Assumptions & Open Questions
+- **Resolved against the freeze:** all eight actions and payloads in §5 are consumed verbatim from [03_websocket_json_schema_spec.md](03_websocket_json_schema_spec.md) §5.3 — notably `SEEK_DELTA` in **milliseconds** (±5000/±30000), `SET_SPEED` with absolute `multiplier` (client computes the ±0.1 step), `FRAME_STEP` with `"FORWARD"|"BACKWARD"`, and `CYCLE_ASPECT_RATIO`.
+- **Assumption:** discrete ±5s/±30s use WS (guaranteed delivery, no position math); UDP `0x04` SCRUB_SEEK stays reserved for continuous drags in Docs 38/41.
+- **Assumption:** speed step = 0.1x (batch brief), reset = 1.0x; agent re-clamps to 0.2–4.0 (Doc 09) as second line of defense.
+- **Assumption:** debounce = 80 ms; `potplayer_running` false disables the grid (kill-switch semantics).
+- **Note (cross-doc consistency):** [42_flutter_haptic_feedback_engine.md](42_flutter_haptic_feedback_engine.md)'s illustrative table says `SET_SPEED {speed:1.0}` — the frozen field name is `multiplier`; Doc 42's wording should follow Doc 03 (no payload crosses Doc 42's API, so no functional impact).
+- **Open:** none blocking implementation.

@@ -1,0 +1,35 @@
+# PotPilot root ignore rules (Doc 01 §4.2) — one block per layer.
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Build (PyInstaller output; pc_agent/installer/potpilot_agent.spec itself is tracked)
+build/
+dist/
+*.spec.bak
+
+# Flutter / Dart (pubspec.lock is tracked: single-app repo, reproducible CI)
+.dart_tool/
+*.iml
+.packages
+
+# InnoSetup
+Output/
+PotPilot_Setup.exe
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+*.swp
+
+# Secrets — pairing token lives only in %APPDATA%\PotPilot\config.json, never committed
+.env
+*.token
+*secret*

@@ -1,0 +1,12 @@
+# PotPilot PC Agent — runtime dependencies (Doc 04 §6.1; lower-bound pins)
+pywin32>=306
+customtkinter>=5.2
+pystray>=0.19
+websockets>=12.0
+zeroconf>=0.131
+monitorcontrol>=3.0
+qrcode>=7.4
+pillow>=10.0
+# Doc 23 CoreAudio append (Doc 04 §6.1 "later appends"):
+pycaw>=0.10,<1
+comtypes>=1.4,<2

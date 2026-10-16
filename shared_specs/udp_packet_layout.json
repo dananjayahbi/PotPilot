@@ -1,0 +1,53 @@
+{
+  "name": "PotPilot UDP binary packet layout",
+  "frozen_by": "plan-series/02_binary_udp_protocol_spec.md (CONTRACT FREEZE)",
+  "udp_port": 50505,
+  "format": "<BBhhH>",
+  "struct_format": "<BBhhH",
+  "struct_format_note": "Doc 01 §5.1/§5.3 and overview §4.1 render the format as \"<BBhhH>\"; the trailing '>' is markdown notation — Python struct rejects it (struct.error: bad char in struct format, verified). Executable snippets (Doc 02 §3, Docs 13/30) use '<BBhhH', which is this file's struct_format.",
+  "size": 8,
+  "endian": "little",
+  "seq_modulo": 65536,
+  "seq_reset_timeout_s": 5.0,
+  "auth_byte": {
+    "size": 1,
+    "range": {"min": 0, "max": 255},
+    "algorithm": "xor-fold",
+    "source": "8-bit XOR checksum of the 16-byte (128-bit) pairing token"
+  },
+  "byte_layout": [
+    {"offset": 0, "size": 1, "struct": "B", "name": "packet_type", "range": {"min": 1, "max": 4}, "semantics": "Packet-type registry (see packet_types)"},
+    {"offset": 1, "size": 1, "struct": "B", "name": "auth_byte", "range": {"min": 0, "max": 255}, "semantics": "8-bit XOR checksum of the 16-byte pairing token"},
+    {"offset": 2, "size": 2, "struct": "h", "name": "arg1", "range": {"min": -32768, "max": 32767}, "semantics": "Primary value (type-specific)"},
+    {"offset": 4, "size": 2, "struct": "h", "name": "arg2", "range": {"min": -32768, "max": 32767}, "semantics": "Secondary value (type-specific)"},
+    {"offset": 6, "size": 2, "struct": "H", "name": "seq", "range": {"min": 0, "max": 65535}, "semantics": "Monotonic per-sender counter, wraps at 65535->0"}
+  ],
+  "packet_types": {
+    "0x01": {"value": 1, "name": "MOUSE_MOVE", "arg1": "dx", "arg2": "dy", "notes": "Relative move; positive X = right, positive Y = down"},
+    "0x02": {"value": 2, "name": "MOUSE_SCROLL", "arg1": "vertical_delta", "arg2": "horizontal_delta", "notes": "Positive = up / right; maps to MOUSEEVENTF_WHEEL/HWHEEL"},
+    "0x03": {"value": 3, "name": "MOUSE_BUTTON", "arg1": "button_id", "arg2": "state", "notes": "button_id 1:L 2:R 3:M; state 1:Down 2:Up 3:Click; Click = synthesized Down+Up (atomic drag-safe)"},
+    "0x04": {"value": 4, "name": "SCRUB_SEEK", "arg1": "target_seconds_high", "arg2": "target_seconds_low", "notes": "target = (high << 16) | (low & 0xFFFF); low word is two's-complement bit pattern in int16"}
+  },
+  "button_ids": {"LEFT": 1, "RIGHT": 2, "MIDDLE": 3},
+  "button_states": {"DOWN": 1, "UP": 2, "CLICK": 3},
+  "routing": {
+    "0x01": "win32_mouse",
+    "0x02": "win32_mouse",
+    "0x03": "win32_mouse",
+    "0x04": "potplayer_seek",
+    "note": "Auth-byte check runs pre-routing (Doc 15)"
+  },
+  "golden_vectors": [
+    {"id": "G1", "scenario": "Move dx=+10, dy=-5", "packet_type": 1, "auth_byte": 90, "arg1": 10, "arg2": -5, "seq": 1, "hex": "01 5A 0A 00 FB FF 01 00"},
+    {"id": "G2", "scenario": "Scroll up 3, right -1", "packet_type": 2, "auth_byte": 90, "arg1": 3, "arg2": -1, "seq": 2, "hex": "02 5A 03 00 FF FF 02 00"},
+    {"id": "G3", "scenario": "Left button Down", "packet_type": 3, "auth_byte": 90, "arg1": 1, "arg2": 1, "seq": 3, "hex": "03 5A 01 00 01 00 03 00"},
+    {"id": "G4", "scenario": "Middle Click", "packet_type": 3, "auth_byte": 90, "arg1": 3, "arg2": 3, "seq": 65535, "hex": "03 5A 03 00 03 00 FF FF"},
+    {"id": "G5", "scenario": "Seek 3661 s (1h 01m 01s)", "packet_type": 4, "auth_byte": 90, "arg1": 0, "arg2": 3661, "seq": 10, "target_seconds": 3661, "hex": "04 5A 00 00 4D 0E 0A 00", "doc_hex": "04 5A 00 00 DD 0E 0A 00", "doc_hex_note": "Doc 02 §5.4 prints `DD 0E` (= 0x0EDD, 3805); little-endian of the frozen field 3661 (0x0E4D) is `4D 0E`. The worked example's \"0x0E2D\" (= 3629) and \"3621\" are misprints too; scenario 1h 01m 01s = 3661 and §9 split/join(3661)==3661 govern."},
+    {"id": "G6", "scenario": "Seek 70000 s (high=1)", "packet_type": 4, "auth_byte": 90, "arg1": 1, "arg2": 4464, "seq": 11, "target_seconds": 70000, "hex": "04 5A 01 00 70 11 0B 00", "doc_hex": "04 5A 01 00 10 11 0B 00", "doc_hex_note": "Doc 02 §5.4 prints `10 11`; low word 0x1170 = 4464 little-endian is `70 11`. Fields + worked example (70000 = 0x11170) govern; corrected here."},
+    {"id": "G7", "scenario": "Min dx=-32768, dy=+32767", "packet_type": 1, "auth_byte": 0, "arg1": -32768, "arg2": 32767, "seq": 0, "hex": "01 00 00 80 FF 7F 00 00"}
+  ],
+  "notes": [
+    "auth_byte = 0x5A in vectors G1-G6 is illustrative; the real value derives from the Doc 15 pairing token.",
+    "G5/G6 hex values are corrections of transcription typos in Doc 02 §5.4; see each vector's doc_hex_note."
+  ]
+}

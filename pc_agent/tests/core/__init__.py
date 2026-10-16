@@ -1,0 +1,1 @@
+"""PotPilot config tests."""

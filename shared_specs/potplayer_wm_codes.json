@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "frozen_by": "plan-series/09_potplayer_wm_command_dispatcher.md (source of truth; Docs 09 & 10 read, nobody else writes)",
+  "base": {
+    "WM_COMMAND": "0x0111",
+    "WM_USER": "0x0400"
+  },
+  "commands": {
+    "PLAY_PAUSE": {
+      "message": "WM_COMMAND",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": null,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "Toggle play/pause"
+    },
+    "PLAY": {
+      "message": "WM_COMMAND",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": null,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "Start/resume playback"
+    },
+    "PAUSE": {
+      "message": "WM_COMMAND",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": null,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "Pause playback"
+    },
+    "SEEK": {
+      "message": "WM_USER",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": "lparam",
+      "value_units": "position_ms",
+      "value_min": 0,
+      "value_max": 2147483647,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "Absolute seek to position_ms (also serves SEEK_DELTA: router adds delta to current position from the Doc 10 snapshot)"
+    },
+    "SET_SPEED": {
+      "message": "WM_USER",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": "lparam",
+      "value_units": "speed_milli",
+      "value_min": 200,
+      "value_max": 4000,
+      "mode": "direct",
+      "needs_ack": true,
+      "step_up": "SPEED_UP",
+      "step_down": "SPEED_DOWN",
+      "status": "capture_required",
+      "description": "multiplier x 1000"
+    },
+    "SPEED_UP": {
+      "message": "WM_USER",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": null,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "Internal +0.1x speed step (steps-mode fallback helper for SET_SPEED)"
+    },
+    "SPEED_DOWN": {
+      "message": "WM_USER",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": null,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "Internal -0.1x speed step (steps-mode fallback helper for SET_SPEED)"
+    },
+    "FRAME_STEP": {
+      "message": "WM_USER",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": "lparam",
+      "value_units": "frame_delta",
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "Step one frame; FORWARD=1, BACKWARD=-1"
+    },
+    "TOGGLE_FULLSCREEN": {
+      "message": "WM_COMMAND",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": null,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "Toggle fullscreen playback"
+    },
+    "CYCLE_ASPECT_RATIO": {
+      "message": "WM_COMMAND",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": null,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "Cycle aspect-ratio presets"
+    },
+    "SET_VOLUME": {
+      "message": "WM_USER",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": "lparam",
+      "value_units": "percent",
+      "value_min": 0,
+      "value_max": 100,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "PotPlayer internal volume 0-100"
+    },
+    "CYCLE_AUDIO": {
+      "message": "WM_COMMAND",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": null,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "Cycle audio streams (wraps around)"
+    },
+    "CYCLE_SUBS": {
+      "message": "WM_COMMAND",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": null,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "Cycle subtitle tracks (wraps around)"
+    },
+    "SET_SUBS": {
+      "message": "WM_USER",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": "lparam",
+      "value_units": "enabled_0_1",
+      "value_min": 0,
+      "value_max": 1,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "Show (1) or hide (0) subtitles"
+    },
+    "SET_SUBS_TOGGLE": {
+      "message": "WM_COMMAND",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": null,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "Toggle subtitles on/off (internal helper for toggle_subtitles())"
+    },
+    "SUB_DELAY_DELTA": {
+      "message": "WM_USER",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "param": "lparam",
+      "value_units": "delta_ms",
+      "value_min": -10000,
+      "value_max": 10000,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "capture_required",
+      "description": "+/-500 ms subtitle sync nudge (wire action SUB_SYNC_ADJUST)"
+    }
+  },
+  "getters": {
+    "GET_POSITION_MS": {
+      "message": "WM_USER",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "reply": "lparam_u32",
+      "value_units": "ms",
+      "status": "capture_required",
+      "description": "Current playback position in milliseconds (sentinel 0xFFFFFFFF -> 0)"
+    },
+    "GET_DURATION_MS": {
+      "message": "WM_USER",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "reply": "lparam_u32",
+      "value_units": "ms",
+      "status": "capture_required",
+      "description": "Total media duration in milliseconds (sentinel 0xFFFFFFFF -> 0)"
+    },
+    "GET_PLAY_STATE": {
+      "message": "WM_USER",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "reply": "lparam_u32",
+      "value_units": "state",
+      "state_map": {"0": "stopped", "1": "paused", "2": "playing"},
+      "status": "capture_required",
+      "description": "Playback state; is_playing when mapped state == playing"
+    },
+    "GET_VOLUME": {
+      "message": "WM_USER",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "reply": "lparam_u32",
+      "value_units": "percent",
+      "status": "capture_required",
+      "description": "PotPlayer internal volume percent (clamped 0-100)"
+    },
+    "GET_SPEED": {
+      "message": "WM_USER",
+      "wparam": "0x0",
+      "lparam": "0x0",
+      "reply": "lparam_u32",
+      "value_units": "speed_milli",
+      "status": "capture_required",
+      "description": "Playback speed in milli-units; raw 0 -> 1.0 (neutral/unreported)"
+    }
+  }
+}

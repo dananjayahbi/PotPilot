@@ -1,0 +1,302 @@
+{
+  "name": "PotPilot WebSocket JSON RPC contract",
+  "frozen_by": "plan-series/03_websocket_json_schema_spec.md (CONTRACT FREEZE)",
+  "ws_port": 50506,
+  "telemetry_interval_ms": 250,
+  "max_frame_bytes": 65536,
+  "full_refresh_every_ticks": 20,
+  "mdns_service_type": "_potpilot._tcp.local.",
+  "envelope": {
+    "id": {
+      "type": "string",
+      "format": "uuid-v4",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "length": 36,
+      "semantics": "Client correlation id; server replies echo it. Telemetry/greeting frames use a fresh uuid4 per frame; clients route by type, never correlate these ids"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["CMD_POTPLAYER", "CMD_KEY", "CMD_SYSTEM", "CMD_MEDIA", "TELEMETRY_SYNC"],
+      "semantics": "Domain selector; TELEMETRY_SYNC is server->client only"
+    },
+    "action": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$",
+      "semantics": "Request = registry name (types.actions); reply = name + _RESULT/_ERROR; telemetry = STATE_DELTA|FULL_STATE; greeting = AUTH_OK"
+    },
+    "payload": {
+      "type": "object",
+      "semantics": "{} allowed; schema per action"
+    },
+    "timestamp": {
+      "type": "integer",
+      "semantics": "Unix seconds, PC clock; server stamps replies/telemetry, clients stamp requests (drift tolerated, display-only)"
+    }
+  },
+  "types": {
+    "CMD_POTPLAYER": {
+      "direction": "client_to_server",
+      "actions": {
+        "PLAY_PAUSE": {"payload": {}, "handler_doc": 9},
+        "PLAY": {"payload": {}, "handler_doc": 9, "notes": "used by call auto-pause resume (Doc 44)"},
+        "PAUSE": {"payload": {}, "handler_doc": 9, "notes": "used by incoming-call hook (Doc 44)"},
+        "SEEK": {
+          "payload": {
+            "position_ms": {"type": "integer", "minimum": 0, "semantics": "Target position in ms; <= current duration"}
+          },
+          "handler_doc": 9,
+          "notes": "scrub bar (Doc 38)"
+        },
+        "SEEK_DELTA": {
+          "payload": {
+            "delta_ms": {"type": "integer", "minimum": -120000, "maximum": 120000, "semantics": "Relative seek in ms; deck sends +/-5000 / +/-30000"}
+          },
+          "handler_doc": 9
+        },
+        "SET_SPEED": {
+          "payload": {
+            "multiplier": {"type": "number", "minimum": 0.2, "maximum": 4.0, "semantics": "Playback speed; client computes +/-0.1 deltas and 1.0 reset"}
+          },
+          "handler_doc": 9
+        },
+        "FRAME_STEP": {
+          "payload": {
+            "direction": {"type": "string", "enum": ["FORWARD", "BACKWARD"]}
+          },
+          "handler_doc": 9
+        },
+        "TOGGLE_FULLSCREEN": {"payload": {}, "handler_doc": 9},
+        "CYCLE_ASPECT_RATIO": {"payload": {}, "handler_doc": 9},
+        "SET_VOLUME": {
+          "payload": {
+            "percent": {"type": "integer", "minimum": 0, "maximum": 100, "semantics": "PotPlayer internal volume; blind-mode slide (Doc 41)"}
+          },
+          "handler_doc": 9
+        },
+        "CYCLE_AUDIO": {"payload": {}, "handler_doc": 9, "notes": "Doc 39"},
+        "CYCLE_SUBS": {"payload": {}, "handler_doc": 9, "notes": "next subtitle track (Doc 39)"},
+        "SET_SUBS": {
+          "payload": {
+            "enabled": {"type": "boolean"}
+          },
+          "handler_doc": 9,
+          "notes": "Doc 39 toggle"
+        },
+        "SUB_SYNC_ADJUST": {
+          "payload": {
+            "delta_ms": {"type": "integer", "minimum": -10000, "maximum": 10000, "multiple_of": 500, "semantics": "Subtitle sync offset; multiple of +/-500, clamp +/-10000 (Doc 39)"}
+          },
+          "handler_doc": 9
+        }
+      }
+    },
+    "CMD_KEY": {
+      "direction": "client_to_server",
+      "actions": {
+        "SEND_KEY": {
+          "payload": {
+            "vk": {"type": "integer", "minimum": 1, "maximum": 254, "semantics": "Win32 VK code; press+release (Doc 07); full keyboard (Doc 37)"}
+          },
+          "handler_doc": 7
+        },
+        "SEND_COMBO": {
+          "payload": {
+            "vk": {"type": "integer", "semantics": "Win32 VK code of the non-modifier key (e.g. F4, D)"},
+            "modifiers": {"type": "array", "items": {"type": "string", "enum": ["CTRL", "ALT", "SHIFT", "WIN"]}, "max_items": 4, "unique_items": true}
+          },
+          "handler_doc": 7
+        },
+        "SEND_TEXT": {
+          "payload": {
+            "text": {"type": "string", "min_length": 1, "max_length": 4096, "semantics": "Any Unicode incl. astral plane; sent as UTF-8 JSON, injected per UTF-16 code unit via KEYEVENTF_UNICODE (Doc 07)"}
+          },
+          "handler_doc": 7
+        }
+      }
+    },
+    "CMD_SYSTEM": {
+      "direction": "client_to_server",
+      "actions": {
+        "SNAP_TO_PRIMARY_MONITOR": {"payload": {}, "handler_doc": 11},
+        "SET_BLACKOUT": {
+          "payload": {
+            "enabled": {"type": "boolean"}
+          },
+          "handler_doc": 12,
+          "notes": "also tray toggle (Doc 25)"
+        },
+        "SET_BRIGHTNESS": {
+          "payload": {
+            "percent": {"type": "integer", "minimum": 0, "maximum": 100, "semantics": "DDC/CI monitor luminance (Doc 40 slider); 4006 if no DDC/CI monitor"}
+          },
+          "handler_doc": 19
+        },
+        "SET_SYSTEM_VOLUME": {
+          "payload": {
+            "percent": {"type": "integer", "minimum": 0, "maximum": 100, "semantics": "CoreAudio master volume"}
+          },
+          "handler_doc": 23
+        },
+        "SET_SYSTEM_MUTE": {
+          "payload": {
+            "muted": {"type": "boolean"}
+          },
+          "handler_doc": 23
+        },
+        "START_SLEEP_TIMER": {
+          "payload": {
+            "mode": {"type": "string", "enum": ["COUNTDOWN", "MOVIE_PROGRESS"]},
+            "target": {"type": "string", "enum": ["SLEEP", "HIBERNATE", "SHUTDOWN"]},
+            "minutes": {"type": "integer", "minimum": 1, "maximum": 720, "required_when": "mode == COUNTDOWN"},
+            "progress_pct": {"type": "integer", "minimum": 1, "maximum": 100, "required_when": "mode == MOVIE_PROGRESS", "semantics": "e.g. 99"}
+          },
+          "handler_doc": 22,
+          "notes": "Doc 40 UI"
+        },
+        "CANCEL_SLEEP_TIMER": {"payload": {}, "handler_doc": 22},
+        "REQUEST_STATE": {
+          "payload": {},
+          "handler_doc": 18,
+          "notes": "_RESULT {\"ok\": true} plus one unicast FULL_STATE telemetry snapshot to the requester"
+        }
+      }
+    },
+    "CMD_MEDIA": {
+      "direction": "client_to_server",
+      "actions": {
+        "LIST_MEDIA": {
+          "payload": {
+            "path": {"type": "string", "optional": true, "semantics": "Folder root, absolute, must be under a configured movie dir"},
+            "query": {"type": "string", "optional": true, "semantics": "Case-insensitive substring"},
+            "offset": {"type": "integer", "optional": true, "minimum": 0, "default": 0},
+            "limit": {"type": "integer", "optional": true, "minimum": 1, "maximum": 200, "default": 50}
+          },
+          "result_payload": {
+            "folders": {"type": "array", "items": "string", "semantics": "Sub-folder names under path (empty at leaf)"},
+            "items": {
+              "type": "array",
+              "items": {
+                "name": "string",
+                "path": "string",
+                "size_bytes": "integer",
+                "modified_at": "integer (unix s)",
+                "has_subs": "boolean"
+              },
+              "semantics": "Matching entries, paged"
+            },
+            "total": {"type": "integer", "semantics": "Matching entries before paging"},
+            "offset": {"type": "integer", "semantics": "Echoed paging window"},
+            "limit": {"type": "integer", "semantics": "Echoed paging window"}
+          },
+          "handler_doc": 20,
+          "notes": "Doc 45 browser; path outside configured dirs or missing file -> 4005"
+        },
+        "RESCAN_MEDIA": {
+          "payload": {},
+          "result_payload": {"ok": true, "queued": true},
+          "handler_doc": 20
+        },
+        "LAUNCH_MEDIA": {
+          "payload": {
+            "path": {"type": "string", "semantics": "Absolute file inside a configured dir; launches fullscreen + snaps primary"}
+          },
+          "handler_doc": 21
+        }
+      }
+    },
+    "TELEMETRY_SYNC": {
+      "direction": "server_to_client",
+      "actions": {
+        "STATE_DELTA": {
+          "payload": {"semantics": "Only keys changed this tick; subset of telemetry.keys. Absent key = unchanged this tick"},
+          "handler_doc": 18
+        },
+        "FULL_STATE": {
+          "payload": {"semantics": "Every registered telemetry key; sent on connect, on REQUEST_STATE, and at least every full_refresh_every_ticks idle ticks"},
+          "handler_doc": 18
+        }
+      }
+    }
+  },
+  "telemetry": {
+    "type": "TELEMETRY_SYNC",
+    "interval_ms": 250,
+    "full_refresh_every_ticks": 20,
+    "empty_diff": "skip entirely (no serialization, no send) unless tick % full_refresh_every_ticks == 0 -> broadcast FULL_STATE",
+    "client_merge_rules": [
+      "FULL_STATE replaces the whole state",
+      "STATE_DELTA replaces only present keys and retains absent ones",
+      "unknown keys are ignored, never errors",
+      "on reconnect the client clears merged state and awaits the next FULL_STATE before rendering authoritative values",
+      "a key is absent from all frames until its provider registers; absence is not null and not an error"
+    ],
+    "keys": {
+      "position_ms": {"type": "integer", "semantics": "Playback position in ms; 0 when idle/none", "producer_doc": 10},
+      "duration_ms": {"type": "integer", "semantics": "Total duration in ms; 0 when unknown", "producer_doc": 10},
+      "is_playing": {"type": "boolean", "semantics": "Play state", "producer_doc": 10},
+      "speed": {"type": "number", "semantics": "Playback multiplier 0.2-4.0, default 1.0", "producer_doc": 10},
+      "volume": {"type": "integer", "minimum": 0, "maximum": 100, "semantics": "PotPlayer internal volume (not Windows master)", "producer_doc": 10},
+      "file_title": {"type": "string|null", "semantics": "Basename without extension; null when idle (clients must not invent a title alias)", "producer_doc": "10/18"},
+      "potplayer_found": {"type": "boolean", "semantics": "PotPlayer64 HWND alive (Doc 08)", "producer_doc": 8},
+      "blackout_active": {"type": "boolean", "semantics": "Blackout overlays currently shown", "producer_doc": 12},
+      "brightness": {"type": "integer|null", "minimum": 0, "maximum": 100, "semantics": "First DDC/CI-capable monitor luminance; null = unsupported/unknown", "producer_doc": 19},
+      "sys_volume": {"type": "integer", "minimum": 0, "maximum": 100, "semantics": "CoreAudio master volume", "producer_doc": 23},
+      "sys_muted": {"type": "boolean", "semantics": "CoreAudio master mute", "producer_doc": 23},
+      "sleep_timer_active": {"type": "boolean", "semantics": "Countdown/progress timer armed", "producer_doc": 22},
+      "sleep_timer_mode": {"type": "string|null", "enum": ["COUNTDOWN", "MOVIE_PROGRESS", null], "semantics": "Timer mode; null when idle", "producer_doc": 22},
+      "sleep_timer_remaining_s": {"type": "integer|null", "semantics": "Seconds until fire; null when idle", "producer_doc": 22}
+    }
+  },
+  "greeting": {
+    "type": "CMD_SYSTEM",
+    "action": "AUTH_OK",
+    "payload": {"ok": true},
+    "when": "Exactly once per authenticated connection, immediately after the 101 upgrade, before any telemetry; Docs 31/32 key their connected transition on it"
+  },
+  "replies": {
+    "result_suffix": "_RESULT",
+    "error_suffix": "_ERROR",
+    "echo_id": true,
+    "exactly_one_reply_per_request": true,
+    "default_result_payload": {"ok": true},
+    "error_payload": {"code": "integer", "message": "string"}
+  },
+  "auth": {
+    "transport": "query_parameter",
+    "param": "auth",
+    "value_format": "32 lowercase hex chars (16-byte secret, Doc 15)",
+    "auth_in_frames": false,
+    "invalid_or_missing_at_upgrade": {"http_status": 401, "client_handling": "terminal authRejected, re-pair required (no retryable backoff)"},
+    "mid_session_revocation_close_code": 4401
+  },
+  "heartbeat": {
+    "client_ping_interval_s": 15,
+    "server_idle_close_s": 30,
+    "close_code": 4408
+  },
+  "forbidden_client_actions": {
+    "actions": ["TELEMETRY_SYNC", "AUTH", "AUTH_FAIL"],
+    "error_code": 4002,
+    "note": "Auth travels only in the connect URL; no AUTH/AUTH_FAIL frames exist. Downstream references to close code 4001 mean 4401"
+  },
+  "close_codes": {
+    "4400": {"name": "PROTOCOL_ERROR", "trigger": "Malformed JSON, invalid envelope, or frame > max_frame_bytes (router E_BAD_JSON/E_BAD_ENVELOPE map here)"},
+    "4401": {"name": "UNAUTHORIZED", "trigger": "Missing/invalid/rotated token at upgrade or mid-session; downstream '4001' means this"},
+    "4408": {"name": "HEARTBEAT_TIMEOUT", "trigger": "Server idle-close after 30 s silence"}
+  },
+  "error_codes": {
+    "4002": {"name": "UNKNOWN_ACTION", "trigger": "Action not in registry for that type, or client sent TELEMETRY_SYNC/AUTH/AUTH_FAIL frames"},
+    "4003": {"name": "INVALID_PAYLOAD", "trigger": "Type/range/required-field violation"},
+    "4004": {"name": "POTPLAYER_NOT_RUNNING", "trigger": "No PotPlayer HWND (Doc 08) for CMD_POTPLAYER"},
+    "4005": {"name": "MEDIA_NOT_FOUND", "trigger": "Path missing/outside configured roots"},
+    "4006": {"name": "HARDWARE_UNAVAILABLE", "trigger": "DDC/CI/audio endpoint error"},
+    "4500": {"name": "INTERNAL_ERROR", "trigger": "Unhandled handler exception (message sanitized)"}
+  },
+  "router_signal_mapping": {
+    "E_BAD_JSON": 4400,
+    "E_BAD_ENVELOPE": 4400,
+    "E_UNKNOWN_ACTION": 4002,
+    "E_UNAUTHORIZED": 4401,
+    "E_HANDLER": 4500
+  }
+}

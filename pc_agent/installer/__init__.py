@@ -1,0 +1,1 @@
+"""PotPilot installer assets."""
