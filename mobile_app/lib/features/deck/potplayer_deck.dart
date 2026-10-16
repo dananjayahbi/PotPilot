@@ -411,7 +411,7 @@ class PotPlayerDeck extends ConsumerWidget {
 
     final bool wsUp = controller.isConnected;
     final bool stale = telemetryAgeMs(telemetry) > kStaleAfter;
-    final bool running = telemetry.extras['potplayer_running'] != false;
+    final bool running = telemetry.extras['potplayer_found'] != false;
     final bool mediaKnown = telemetry.durationMs > 0;
     final bool speedKnown = telemetry.speed >= kSpeedMin;
     final bool dim = !wsUp || stale || !running;

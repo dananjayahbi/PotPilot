@@ -112,7 +112,7 @@ void main() {
           if (speed != null) 'speed': speed,
           'volume': 42,
           'file_title': 'Interstellar',
-          'potplayer_running': running,
+          'potplayer_found': running,
         },
         timestamp: timestamp,
       ),
@@ -183,7 +183,7 @@ void main() {
     expect(keyEnabled(tester, DeckAction.seekFwd5), isTrue);
   });
 
-  testWidgets('potplayer_running == false kills the whole grid (§5)',
+  testWidgets('potplayer_found == false kills the whole grid (§5)',
       (WidgetTester tester) async {
     push(running: false);
     await pumpDeck(tester);

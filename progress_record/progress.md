@@ -53,10 +53,10 @@
 
 ## Open / deferred (manual / hardware — by design)
 
-- 21 PotPlayer WM code IDs are `capture_required` placeholders — live Spy++ capture session (Doc 09 manual step).
+- ~~21 PotPlayer WM code IDs are `capture_required` placeholders~~ — **resolved**: the Doc 09 table now carries live-verified protocol values (`python -m pc_agent.potplayer.verify_codes` → **12 PASS / 0 FAIL / 5 SENT** against real PotPlayer with media). Notes: `GET_SPEED` (0x5015) never reports on the live build, so `SET_SPEED` travels as steps-mode (`WM_COMMAND` 10248/10247) guarded by a dispatcher speed-belief, with `SPEED_DEFAULT` (hotkey `Z`) as the deterministic resync; direct `POT_SET_SPEED` 0x5016 acks but is a no-op.
 - On-device phone checks: QR pairing, 120 Hz trackpad feel, blind bed mode eyes-closed pass, volume-key hijack OSD, incoming-call auto-pause, haptic feel (Docs 35/41/42/43/44 §9).
 - VM installer smoke: install/uninstall, firewall rules verified via `netsh`, autostart (Doc 28 §9).
-- Real-PotPlayer live control + real DDC/CI monitor luminance checks (Docs 09/19/21 §9).
+- Real DDC/CI monitor luminance checks (Doc 19 §9). *(Real-PotPlayer live control: done — `verify_codes` 12 PASS.)*
 - Optional: bump AGP to ≥8.11.1 in `android/settings.gradle` so `flutter build apk --release` runs without `--android-skip-build-dependency-validation`; add `assets/potpilot_icon.ico` (tray falls back to generated glyph).
 - Known test-env notes: E2E M4/M5/M6 assume machine exclusivity (Doc 46 §10); `udp_sender` buffer-reuse test hardened against cross-process loopback loss (retries missing encoding; byte-distinctness invariant unchanged).
 
@@ -76,3 +76,4 @@
 | 2026-10-16 | Wave 2.B complete; Session 2 milestone PASS (ruff ✅, pytest 429 ✅, flutter analyze ✅, flutter test 533 ✅) | 93% (43/46) |
 | 2026-10-16 | Session 3 launched (4 agents: PC wiring + PyInstaller, InnoSetup, Flutter shell + release APK, E2E suite) | 93% (43/46) |
 | 2026-10-16 | Session 3 complete: wiring + builds + installer + E2E M1–M9 PASS; final sequential gate ALL GREEN (ruff, pytest 477, analyze, flutter 533, 3 artifacts); flaky-test hardening | **100% (46/46)** 🏁 |
+| 2026-10-16 | PotPlayer playback control fixed end-to-end (deck did nothing): Doc 09 table filled with live-verified protocol values; SET_SPEED → steps-mode + speed-belief (0x5016 no-op, 0x5015 unreported); `verify_codes` live 12 PASS / 0 FAIL; gates re-run: ruff ✅, pytest 481 ✅, flutter analyze ✅ | **100% (46/46)** |

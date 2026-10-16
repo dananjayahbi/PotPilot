@@ -42,6 +42,16 @@ SMTO_ABORTIFHUNG = 0x0002
 SEEK_MAX_MS = 2**31 - 1
 SUB_DELAY_MAX_MS = 10000
 
+# POT_SEND_VIRTUAL_KEY (0x5010) payloads: PotPlayer default hotkeys, with the
+# public modifier flags OR'd in (InternalSimpleCmd.h, available since 2023-08-30).
+VK_FLAG_SHIFT = 0x0100
+VK_FLAG_CONTROL = 0x0200
+VK_FLAG_ALT = 0x0400
+VK_FRAME_STEP_FWD = 0x46  # F: frame step forward
+VK_FRAME_STEP_BACK = 0x44  # D: frame step backward
+VK_SUB_DELAY_FASTER = 0xBE  # '.': subtitle sync +0.5 s per press
+VK_SUB_DELAY_SLOWER = 0xBC  # ',': subtitle sync -0.5 s per press
+
 _VALID_PARAMS = {None, "wparam", "lparam", "lparam_loword", "lparam_hiword"}
 _VALID_MODES = {"direct", "steps"}
 _VALID_STATUS = {"verified", "capture_required"}
@@ -186,6 +196,13 @@ class WmDispatcher:
         messages, commands = _load_table(self._codes_path)  # fail fast on invalid table
         self._messages = messages
         self._commands = commands
+        # Belief-guard for SET_SUBS (no absolute set in the public API): PotPlayer
+        # shows subtitles by default whenever the file provides a track.
+        self._subs_visible = True
+        # Speed belief: GET_SPEED is unreported on the live build (raw 0 ->
+        # 1.0), so steps-mode math keeps the last applied target and only
+        # resyncs from the provider when it reports a genuinely different value.
+        self._speed_belief = SPEED_DEFAULT
         self.stats: Counter[str] = Counter()
 
     # ------------------------------------------------------------ table I/O
@@ -285,14 +302,14 @@ class WmDispatcher:
         return self.dispatch("PLAY_PAUSE")
 
     def frame_step(self, direction: str = "FORWARD") -> DispatchResult:
-        """Step one frame; direction is the frozen "FORWARD" | "BACKWARD" (±1 internally)."""
+        """Step one frame; direction is the frozen "FORWARD" | "BACKWARD" (F/D key)."""
         if direction == "FORWARD":
-            delta = 1
+            value = VK_FRAME_STEP_FWD
         elif direction == "BACKWARD":
-            delta = -1
+            value = VK_FRAME_STEP_BACK
         else:
             return DispatchResult(False, "FRAME_STEP", None, "bad_value")
-        return self.dispatch("FRAME_STEP", value=delta)
+        return self.dispatch("FRAME_STEP", value=value)
 
     def set_speed(self, multiplier: float) -> DispatchResult:
         """Set playback speed; clamps to 0.2–4.0, rounds to 0.1."""
@@ -308,7 +325,10 @@ class WmDispatcher:
         entry.pop("__messages", None)
         if entry.get("mode") == "steps":
             return self._steps_toward(name, entry, target)
-        return self.dispatch("SET_SPEED", value=int(round(target * 1000)))
+        result = self.dispatch("SET_SPEED", value=int(round(target * 1000)))
+        if result.ok:
+            self._speed_belief = target
+        return result
 
     def step_speed(self, delta: float) -> DispatchResult:
         """Internal relative speed step; uses the last known speed state."""
@@ -338,16 +358,40 @@ class WmDispatcher:
         return self.dispatch("CYCLE_SUBS")
 
     def toggle_subtitles(self) -> DispatchResult:
-        """Toggle subtitles on/off."""
-        return self.dispatch("SET_SUBS_TOGGLE")
+        """Toggle subtitles on/off (flips the tracked visibility belief)."""
+        result = self.dispatch("SET_SUBS_TOGGLE")
+        if result.ok:
+            self._subs_visible = not self._subs_visible
+        return result
+
+    def set_subtitles(self, enabled: bool) -> DispatchResult:
+        """Absolute show/hide: post a toggle only when the desired state differs
+        from the tracked belief (best-effort — the public API has no absolute set)."""
+        if not isinstance(enabled, bool):
+            return DispatchResult(False, "SET_SUBS", None, "bad_value")
+        if self._subs_visible == enabled:
+            return DispatchResult(True, "SET_SUBS", self._locator.find(), "posted")
+        result = self.dispatch("SET_SUBS_TOGGLE")
+        if result.ok:
+            self._subs_visible = enabled
+        return DispatchResult(result.ok, "SET_SUBS", result.hwnd, result.detail)
 
     def adjust_subtitle_delay(self, delta_ms: int = SUB_DELAY_STEP_MS) -> DispatchResult:
-        """Nudge subtitle sync; rounded to the nearest multiple of ±500 ms."""
+        """Nudge subtitle sync; rounded to the nearest multiple of ±500 ms and
+        replayed as that many default-key presses ('.' faster / ',' slower)."""
         try:
             rounded = _round_half_away(int(delta_ms), SUB_DELAY_STEP_MS)
         except (TypeError, ValueError):
             return DispatchResult(False, "SUB_DELAY_DELTA", None, "bad_value")
-        return self.dispatch("SUB_DELAY_DELTA", value=rounded)
+        if rounded == 0:
+            return DispatchResult(False, "SUB_DELAY_DELTA", None, "bad_value")
+        key = VK_SUB_DELAY_FASTER if rounded > 0 else VK_SUB_DELAY_SLOWER
+        result = DispatchResult(False, "SUB_DELAY_DELTA", None, "bad_value")
+        for _ in range(abs(rounded) // SUB_DELAY_STEP_MS):
+            result = self.dispatch("SUB_DELAY_DELTA", value=key)
+            if not result.ok:
+                return result
+        return result
 
     def seek_ms(self, position_ms: int) -> DispatchResult:
         """Absolute seek (UDP 0x04 target_seconds and scrub-bar taps)."""
@@ -369,7 +413,13 @@ class WmDispatcher:
             return None
         if not math.isfinite(value) or value <= 0:
             return None
-        return _clamp_speed(value)
+        value = _clamp_speed(value)
+        if value != SPEED_DEFAULT:
+            self._speed_belief = value  # provider reported a real speed: resync
+            return value
+        # Exactly 1.0 is ambiguous (true default vs unreported 0x5015): keep the
+        # belief, otherwise every identical target would re-apply its steps.
+        return self._speed_belief
 
     def _steps_toward(self, name: str, entry: dict, target: float) -> DispatchResult:
         current = self._current_speed()
@@ -394,4 +444,5 @@ class WmDispatcher:
 
         threading.Thread(target=_worker, daemon=True, name="potpilot-speed-steps").start()
         self.stats["posted"] += 1
+        self._speed_belief = target  # best-effort: applied steps may be cut short
         return DispatchResult(True, name, self._locator.find(), "posted")

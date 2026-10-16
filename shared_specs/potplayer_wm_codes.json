@@ -7,38 +7,38 @@
   },
   "commands": {
     "PLAY_PAUSE": {
-      "message": "WM_COMMAND",
-      "wparam": "0x0",
+      "message": "WM_USER",
+      "wparam": "0x5007",
       "lparam": "0x0",
       "param": null,
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "Toggle play/pause"
+      "status": "verified",
+      "description": "Toggle play/pause (POT_SET_PLAY_STATUS, lparam 0 = toggle)"
     },
     "PLAY": {
-      "message": "WM_COMMAND",
-      "wparam": "0x0",
-      "lparam": "0x0",
+      "message": "WM_USER",
+      "wparam": "0x5007",
+      "lparam": "0x2",
       "param": null,
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "Start/resume playback"
+      "status": "verified",
+      "description": "Start/resume playback (POT_SET_PLAY_STATUS, lparam 2 = running)"
     },
     "PAUSE": {
-      "message": "WM_COMMAND",
-      "wparam": "0x0",
-      "lparam": "0x0",
+      "message": "WM_USER",
+      "wparam": "0x5007",
+      "lparam": "0x1",
       "param": null,
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "Pause playback"
+      "status": "verified",
+      "description": "Pause playback (POT_SET_PLAY_STATUS, lparam 1 = paused)"
     },
     "SEEK": {
       "message": "WM_USER",
-      "wparam": "0x0",
+      "wparam": "0x5005",
       "lparam": "0x0",
       "param": "lparam",
       "value_units": "position_ms",
@@ -46,78 +46,88 @@
       "value_max": 2147483647,
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "Absolute seek to position_ms (also serves SEEK_DELTA: router adds delta to current position from the Doc 10 snapshot)"
+      "status": "verified",
+      "description": "POT_SET_CURRENT_TIME absolute seek to position_ms (also serves SEEK_DELTA: router adds delta to current position from the Doc 10 snapshot)"
     },
     "SET_SPEED": {
       "message": "WM_USER",
-      "wparam": "0x0",
+      "wparam": "0x5016",
       "lparam": "0x0",
       "param": "lparam",
       "value_units": "speed_milli",
       "value_min": 200,
       "value_max": 4000,
-      "mode": "direct",
-      "needs_ack": true,
+      "mode": "steps",
+      "needs_ack": false,
       "step_up": "SPEED_UP",
       "step_down": "SPEED_DOWN",
-      "status": "capture_required",
-      "description": "multiplier x 1000"
+      "status": "verified",
+      "description": "Speed set travels as0.1x step posts via SPEED_UP/SPEED_DOWN (live span-timing: direct POT_SET_SPEED 0x5016 acks but is a no-op on the live build; GET_SPEED never reports, so the dispatcher tracks a speed belief)"
     },
     "SPEED_UP": {
-      "message": "WM_USER",
-      "wparam": "0x0",
+      "message": "WM_COMMAND",
+      "wparam": "0x2808",
       "lparam": "0x0",
       "param": null,
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "Internal +0.1x speed step (steps-mode fallback helper for SET_SPEED)"
+      "status": "verified",
+      "description": "Internal +0.1x speed step (WM_COMMAND 10248; live span-timing verified — primary engine of steps-mode SET_SPEED)"
     },
     "SPEED_DOWN": {
-      "message": "WM_USER",
-      "wparam": "0x0",
+      "message": "WM_COMMAND",
+      "wparam": "0x2807",
       "lparam": "0x0",
       "param": null,
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "Internal -0.1x speed step (steps-mode fallback helper for SET_SPEED)"
+      "status": "verified",
+      "description": "Internal -0.1x speed step (WM_COMMAND 10247; live span-timing verified — primary engine of steps-mode SET_SPEED)"
+    },
+    "SPEED_DEFAULT": {
+      "message": "WM_USER",
+      "wparam": "0x5010",
+      "lparam": "0x5A",
+      "param": null,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "verified",
+      "description": "POT_SEND_VIRTUAL_KEY 'Z' — restore the default 1.0x speed (menu-verified hotkey; deterministic resync for the steps-mode speed belief)"
     },
     "FRAME_STEP": {
       "message": "WM_USER",
-      "wparam": "0x0",
+      "wparam": "0x5010",
       "lparam": "0x0",
       "param": "lparam",
-      "value_units": "frame_delta",
+      "value_units": "vk_code",
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "Step one frame; FORWARD=1, BACKWARD=-1"
+      "status": "verified",
+      "description": "POT_SEND_VIRTUAL_KEY frame step: FORWARD=VK F (0x46), BACKWARD=VK D (0x44); takes effect while paused"
     },
     "TOGGLE_FULLSCREEN": {
       "message": "WM_COMMAND",
-      "wparam": "0x0",
+      "wparam": "0x271D",
       "lparam": "0x0",
       "param": null,
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "Toggle fullscreen playback"
+      "status": "verified",
+      "description": "Toggle fullscreen playback (WM_COMMAND 10013)"
     },
     "CYCLE_ASPECT_RATIO": {
-      "message": "WM_COMMAND",
-      "wparam": "0x0",
-      "lparam": "0x0",
+      "message": "WM_USER",
+      "wparam": "0x5010",
+      "lparam": "0x246",
       "param": null,
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "Cycle aspect-ratio presets"
+      "status": "verified",
+      "description": "POT_SEND_VIRTUAL_KEY Ctrl+F6 = Video > Aspect Ratio > Cycle Aspect Ratio"
     },
     "SET_VOLUME": {
       "message": "WM_USER",
-      "wparam": "0x0",
+      "wparam": "0x5001",
       "lparam": "0x0",
       "param": "lparam",
       "value_units": "percent",
@@ -125,112 +135,107 @@
       "value_max": 100,
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "PotPlayer internal volume 0-100"
+      "status": "verified",
+      "description": "POT_SET_VOLUME, PotPlayer internal volume 0-100"
     },
     "CYCLE_AUDIO": {
-      "message": "WM_COMMAND",
-      "wparam": "0x0",
-      "lparam": "0x0",
+      "message": "WM_USER",
+      "wparam": "0x5010",
+      "lparam": "0x641",
       "param": null,
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "Cycle audio streams (wraps around)"
+      "status": "verified",
+      "description": "POT_SEND_VIRTUAL_KEY Ctrl+Alt+A = Audio > Select Audio Stream > Cycle Audio Stream"
     },
     "CYCLE_SUBS": {
+      "message": "WM_USER",
+      "wparam": "0x5010",
+      "lparam": "0x44C",
+      "param": null,
+      "mode": "direct",
+      "needs_ack": false,
+      "status": "verified",
+      "description": "POT_SEND_VIRTUAL_KEY Alt+L = Subtitles > Add/Select Subtitles > Cycle Subtitle"
+    },
+    "SET_SUBS": {
       "message": "WM_COMMAND",
-      "wparam": "0x0",
+      "wparam": "0x278E",
       "lparam": "0x0",
       "param": null,
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "Cycle subtitle tracks (wraps around)"
-    },
-    "SET_SUBS": {
-      "message": "WM_USER",
-      "wparam": "0x0",
-      "lparam": "0x0",
-      "param": "lparam",
-      "value_units": "enabled_0_1",
-      "value_min": 0,
-      "value_max": 1,
-      "mode": "direct",
-      "needs_ack": false,
-      "status": "capture_required",
-      "description": "Show (1) or hide (0) subtitles"
+      "status": "verified",
+      "description": "Show/hide subtitles; the public API has no absolute set, so the dispatcher's set_subtitles() belief-guard converts desired enabled state into toggle posts (WM_COMMAND 10126)"
     },
     "SET_SUBS_TOGGLE": {
       "message": "WM_COMMAND",
-      "wparam": "0x0",
+      "wparam": "0x278E",
       "lparam": "0x0",
       "param": null,
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "Toggle subtitles on/off (internal helper for toggle_subtitles())"
+      "status": "verified",
+      "description": "Toggle subtitles on/off (WM_COMMAND 10126; internal helper for set_subtitles()/toggle_subtitles())"
     },
     "SUB_DELAY_DELTA": {
       "message": "WM_USER",
-      "wparam": "0x0",
+      "wparam": "0x5010",
       "lparam": "0x0",
       "param": "lparam",
-      "value_units": "delta_ms",
-      "value_min": -10000,
-      "value_max": 10000,
+      "value_units": "vk_code",
       "mode": "direct",
       "needs_ack": false,
-      "status": "capture_required",
-      "description": "+/-500 ms subtitle sync nudge (wire action SUB_SYNC_ADJUST)"
+      "status": "verified",
+      "description": "POT_SEND_VIRTUAL_KEY subtitle-sync nudge (wire action SUB_SYNC_ADJUST); dispatcher maps each +/-500 ms step to the default keys '.' (VK 0xBE, +0.5 s) / ',' (VK 0xBC, -0.5 s)"
     }
   },
   "getters": {
     "GET_POSITION_MS": {
       "message": "WM_USER",
-      "wparam": "0x0",
+      "wparam": "0x5004",
       "lparam": "0x0",
       "reply": "lparam_u32",
       "value_units": "ms",
-      "status": "capture_required",
-      "description": "Current playback position in milliseconds (sentinel 0xFFFFFFFF -> 0)"
+      "status": "verified",
+      "description": "POT_GET_CURRENT_TIME; sentinel 0xFFFFFFFF -> 0"
     },
     "GET_DURATION_MS": {
       "message": "WM_USER",
-      "wparam": "0x0",
+      "wparam": "0x5002",
       "lparam": "0x0",
       "reply": "lparam_u32",
       "value_units": "ms",
-      "status": "capture_required",
-      "description": "Total media duration in milliseconds (sentinel 0xFFFFFFFF -> 0)"
+      "status": "verified",
+      "description": "POT_GET_TOTAL_TIME; sentinel 0xFFFFFFFF -> 0"
     },
     "GET_PLAY_STATE": {
       "message": "WM_USER",
-      "wparam": "0x0",
+      "wparam": "0x5006",
       "lparam": "0x0",
       "reply": "lparam_u32",
       "value_units": "state",
       "state_map": {"0": "stopped", "1": "paused", "2": "playing"},
-      "status": "capture_required",
-      "description": "Playback state; is_playing when mapped state == playing"
+      "status": "verified",
+      "description": "POT_GET_PLAY_STATUS (0/-1 stopped, 1 paused, 2 running); is_playing when mapped state == playing"
     },
     "GET_VOLUME": {
       "message": "WM_USER",
-      "wparam": "0x0",
+      "wparam": "0x5000",
       "lparam": "0x0",
       "reply": "lparam_u32",
       "value_units": "percent",
-      "status": "capture_required",
-      "description": "PotPlayer internal volume percent (clamped 0-100)"
+      "status": "verified",
+      "description": "POT_GET_VOLUME (0-100)"
     },
     "GET_SPEED": {
       "message": "WM_USER",
-      "wparam": "0x0",
+      "wparam": "0x5015",
       "lparam": "0x0",
       "reply": "lparam_u32",
       "value_units": "speed_milli",
-      "status": "capture_required",
-      "description": "Playback speed in milli-units; raw 0 -> 1.0 (neutral/unreported)"
+      "status": "verified",
+      "description": "POT_GET_SPEED, milli-units 200-12000; raw 0 -> 1.0 (neutral/unreported)"
     }
   }
 }

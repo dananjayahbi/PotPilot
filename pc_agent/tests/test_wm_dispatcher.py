@@ -100,22 +100,25 @@ def _wait_for_posts(posts, count, timeout=2.0):
 
 # ------------------------------------------------------------- Doc 09 §5 action registry
 
+# SET_SPEED is steps-mode (async 0.1x posts + speed belief), so it is covered
+# by the steps-mode section below instead of the one-post-per-action smoke.
+
 ACTION_CASES = [
-    ("PLAY_PAUSE", "play_pause", "PLAY_PAUSE", (WM_COMMAND, 0, 0)),
-    ("PLAY", "dispatch_play", "PLAY", (WM_COMMAND, 0, 0)),
-    ("PAUSE", "dispatch_pause", "PAUSE", (WM_COMMAND, 0, 0)),
-    ("SEEK", "seek", "SEEK", (WM_USER, 0, 8_410_000)),
+    ("PLAY_PAUSE", "play_pause", "PLAY_PAUSE", (WM_USER, 0x5007, 0)),
+    ("PLAY", "dispatch_play", "PLAY", (WM_USER, 0x5007, 2)),
+    ("PAUSE", "dispatch_pause", "PAUSE", (WM_USER, 0x5007, 1)),
+    ("SEEK", "seek", "SEEK", (WM_USER, 0x5005, 8_410_000)),
     # Router-side SEEK_DELTA arithmetic (current from the Doc 10 snapshot) lands on SEEK.
-    ("SEEK_DELTA", "seek_delta", "SEEK", (WM_USER, 0, 3_000)),
-    ("SET_SPEED", "speed", "SET_SPEED", (WM_USER, 0, 1_400)),
-    ("FRAME_STEP", "frame_fwd", "FRAME_STEP", (WM_USER, 0, 1)),
-    ("TOGGLE_FULLSCREEN", "fullscreen", "TOGGLE_FULLSCREEN", (WM_COMMAND, 0, 0)),
-    ("CYCLE_ASPECT_RATIO", "aspect", "CYCLE_ASPECT_RATIO", (WM_COMMAND, 0, 0)),
-    ("SET_VOLUME", "volume", "SET_VOLUME", (WM_USER, 0, 42)),
-    ("CYCLE_AUDIO", "audio", "CYCLE_AUDIO", (WM_COMMAND, 0, 0)),
-    ("CYCLE_SUBS", "subs", "CYCLE_SUBS", (WM_COMMAND, 0, 0)),
-    ("SET_SUBS", "set_subs", "SET_SUBS", (WM_USER, 0, 1)),
-    ("SUB_SYNC_ADJUST", "sub_sync", "SUB_DELAY_DELTA", (WM_USER, 0, -500)),
+    ("SEEK_DELTA", "seek_delta", "SEEK", (WM_USER, 0x5005, 3_000)),
+    ("FRAME_STEP", "frame_fwd", "FRAME_STEP", (WM_USER, 0x5010, 0x46)),
+    ("TOGGLE_FULLSCREEN", "fullscreen", "TOGGLE_FULLSCREEN", (WM_COMMAND, 0x271D, 0)),
+    ("CYCLE_ASPECT_RATIO", "aspect", "CYCLE_ASPECT_RATIO", (WM_USER, 0x5010, 0x246)),
+    ("SET_VOLUME", "volume", "SET_VOLUME", (WM_USER, 0x5001, 42)),
+    ("SPEED_DEFAULT", "speed_default", "SPEED_DEFAULT", (WM_USER, 0x5010, 0x5A)),
+    ("CYCLE_AUDIO", "audio", "CYCLE_AUDIO", (WM_USER, 0x5010, 0x641)),
+    ("CYCLE_SUBS", "subs", "CYCLE_SUBS", (WM_USER, 0x5010, 0x44C)),
+    ("SET_SUBS", "set_subs", "SET_SUBS", (WM_COMMAND, 0x278E, 0)),
+    ("SUB_SYNC_ADJUST", "sub_sync", "SUB_DELAY_DELTA", (WM_USER, 0x5010, 0xBC)),
 ]
 
 INVOKERS = {
@@ -124,11 +127,11 @@ INVOKERS = {
     "dispatch_pause": lambda d: d.dispatch("PAUSE"),
     "seek": lambda d: d.seek_ms(8_410_000),
     "seek_delta": lambda d: d.seek_ms(max(0, 8_000 + (-5_000))),
-    "speed": lambda d: d.set_speed(1.4),
     "frame_fwd": lambda d: d.frame_step("FORWARD"),
     "fullscreen": lambda d: d.dispatch("TOGGLE_FULLSCREEN"),
     "aspect": lambda d: d.dispatch("CYCLE_ASPECT_RATIO"),
     "volume": lambda d: d.dispatch("SET_VOLUME", value=42),
+    "speed_default": lambda d: d.dispatch("SPEED_DEFAULT"),
     "audio": lambda d: d.cycle_audio_track(),
     "subs": lambda d: d.cycle_subtitle_track(),
     "set_subs": lambda d: d.dispatch("SET_SUBS", value=True),
@@ -159,39 +162,58 @@ def test_action_table_smoke(posts, acks, action, invoker, entry_name, expected):
 
 def test_generic_dispatch_alias_sub_sync_adjust(posts):
     dispatcher = make_dispatcher()
-    result = dispatcher.dispatch("SUB_SYNC_ADJUST", value=-1500)
+    # Raw dispatch packs the caller's payload as-is; the ms → key-press mapping
+    # lives in adjust_subtitle_delay().
+    result = dispatcher.dispatch("SUB_SYNC_ADJUST", value=0xBC)
     assert result.ok and result.command == "SUB_DELAY_DELTA"
-    assert posts == [(1234, WM_USER, 0, -1500)]
+    assert posts == [(1234, WM_USER, 0x5010, 0xBC)]
 
 
 # ------------------------------------------------------------- value conditioning
 
 
 def test_speed_clamp_and_round(posts, acks):
-    dispatcher = make_dispatcher()
-    cases = [(8.0, 4000), (0.05, 200), (1.3999, 1400), (1.45, 1500)]
-    for multiplier, expected_lparam in cases:
+    """Clamped/rounded targets become exactly n0.1x step posts (no acks)."""
+    cases = [(8.0, 30), (0.05, -8), (1.3999, 4), (1.45, 5)]
+    for multiplier, expected_steps in cases:
+        dispatcher = make_dispatcher(speed_provider=lambda: 1.0)
         result = dispatcher.set_speed(multiplier)
         assert result.command == "SET_SPEED", multiplier
-        _hwnd, msg, wparam, lparam, _timeout = acks["calls"][-1]
-        assert (msg, wparam, lparam) == (WM_USER, 0, expected_lparam), multiplier
-    assert posts == []  # needs_ack entries never use PostMessage
+        assert result.ok and result.detail == "posted", multiplier
+        wparam = 0x2808 if expected_steps > 0 else 0x2807  # SPEED_UP / SPEED_DOWN
+        _wait_for_posts(posts, abs(expected_steps))
+        time.sleep(0.05)
+        assert len(posts) == abs(expected_steps), multiplier
+        assert all(post[1:] == (WM_COMMAND, wparam, 0) for post in posts), multiplier
+        posts.clear()
+    assert acks["calls"] == []  # steps travel via PostMessage, never SendMessageTimeout
 
 
 def test_sub_delay_rounding(posts):
     dispatcher = make_dispatcher()
     cases = [
-        (-300, -500),
-        (700, 500),
-        (250, 500),
-        (-250, -500),
-        (12_000, 10_000),
-        (-12_000, -10_000),
+        (-300, 0xBC),  # rounds to -500 ms -> one ',' press
+        (700, 0xBE),  # rounds to +500 ms -> one '.' press
+        (250, 0xBE),
+        (-250, 0xBC),
+        (12_000, 0xBE),  # +10000 ms -> twenty '.' presses
+        (-12_000, 0xBC),
     ]
-    for delta, expected_lparam in cases:
+    for delta, expected_vk in cases:
         result = dispatcher.adjust_subtitle_delay(delta)
         assert result.ok, delta
-        assert posts[-1] == (1234, WM_USER, 0, expected_lparam), delta
+        assert posts[-1] == (1234, WM_USER, 0x5010, expected_vk), delta
+
+
+def test_sub_delay_multiple_key_presses(posts):
+    dispatcher = make_dispatcher()
+    assert dispatcher.adjust_subtitle_delay(1000).ok
+    assert len(posts) == 2  # each ±500 ms step is exactly one key press
+    assert all(post == (1234, WM_USER, 0x5010, 0xBE) for post in posts)
+    posts.clear()
+    # Rounds to zero -> rejected without a post.
+    assert dispatcher.adjust_subtitle_delay(100).detail == "bad_value"
+    assert posts == []
 
 
 def test_seek_clamps_overflow_and_negatives(posts):
@@ -213,9 +235,9 @@ def test_volume_and_subs_clamps(posts):
 def test_frame_step_directions(posts):
     dispatcher = make_dispatcher()
     assert dispatcher.frame_step("FORWARD").ok
-    assert posts[-1][3] == 1
+    assert posts[-1] == (1234, WM_USER, 0x5010, 0x46)  # VK F
     assert dispatcher.frame_step("BACKWARD").ok
-    assert posts[-1][3] == -1
+    assert posts[-1] == (1234, WM_USER, 0x5010, 0x44)  # VK D
     bad = dispatcher.frame_step("SIDEWAYS")
     assert not bad.ok and bad.detail == "bad_value"
 
@@ -224,7 +246,28 @@ def test_toggle_subtitles(posts):
     dispatcher = make_dispatcher()
     result = dispatcher.toggle_subtitles()
     assert result.ok and result.command == "SET_SUBS_TOGGLE"
-    assert posts == [(1234, WM_COMMAND, 0, 0)]
+    assert posts == [(1234, WM_COMMAND, 0x278E, 0)]
+
+
+def test_set_subtitles_belief_guard(posts):
+    dispatcher = make_dispatcher()
+    # Initial belief: visible (PotPlayer shows subs whenever the file has them).
+    assert dispatcher.set_subtitles(True).ok
+    assert posts == []  # already visible -> no toggle
+    assert dispatcher.set_subtitles(False).ok
+    assert posts == [(1234, WM_COMMAND, 0x278E, 0)]  # one toggle -> hidden
+    assert dispatcher.set_subtitles(False).ok
+    assert len(posts) == 1  # belief matches -> no extra toggle
+    assert dispatcher.set_subtitles(True).ok
+    assert posts == [(1234, WM_COMMAND, 0x278E, 0)] * 2
+    assert dispatcher.set_subtitles("yes").detail == "bad_value"
+
+
+def test_set_subtitles_no_window(posts):
+    dispatcher = make_dispatcher(FakeLocator(hwnd=None))
+    result = dispatcher.set_subtitles(False)
+    assert not result.ok and result.detail == "no_window"
+    assert posts == []
 
 
 # ------------------------------------------------------------- packing modes
@@ -276,7 +319,7 @@ def test_dead_hwnd_invalidate_retry_once(posts, monkeypatch):
     result = dispatcher.play_pause()
     assert result.ok and result.detail == "posted"
     assert locator.invalidations == 1
-    assert posts == [(1234, WM_COMMAND, 0, 0)]
+    assert posts == [(1234, WM_USER, 0x5007, 0)]
 
     # Persistent failure on a fresh dispatcher: attempt 1 fails -> invalidate +
     # retry; attempt 2 fails -> invalidate + clean no_window; no exception escapes.
@@ -302,9 +345,20 @@ def test_unknown_command_and_bad_value():
     assert not result.ok and result.detail == "bad_value"
 
 
-def test_needs_ack_timeout_within_budget(posts, acks):
+def _set_speed_table(tmp_path, **overrides) -> Path:
+    """Copy of the shipped table with SET_SPEED overridden (ack/direct-path tests)."""
+    table = json.loads(REPO_SPECS.read_text(encoding="utf-8"))
+    table["commands"]["SET_SPEED"].update(overrides)
+    path = tmp_path / "set_speed.json"
+    path.write_text(json.dumps(table), encoding="utf-8")
+    return path
+
+
+def test_needs_ack_timeout_within_budget(posts, acks, tmp_path):
     acks["results"] = [0]  # SendMessageTimeoutW reports failure -> timeout
-    dispatcher = make_dispatcher()
+    # The shipped SET_SPEED is steps-mode (fire-and-forget); the direct ack path
+    # is exercised via a temp table that puts it back into direct + needs_ack.
+    dispatcher = make_dispatcher(path=_set_speed_table(tmp_path, mode="direct", needs_ack=True))
     started = time.perf_counter()
     result = dispatcher.set_speed(1.4)
     elapsed = time.perf_counter() - started
@@ -353,45 +407,35 @@ def test_reload_keeps_old_table_on_error(posts, tmp_path):
 
 
 # ------------------------------------------------------------- steps-mode speed
+# The shipped table is steps-mode: SET_SPEED posts n SPEED_UP/SPEED_DOWN
+# entries (WM_COMMAND 10248/10247) instead of the no-op direct 0x5016, and the
+# speed belief absorbs GET_SPEED's permanently-unreported 1.0.
 
 
-def _steps_table(tmp_path) -> Path:
-    table = json.loads(REPO_SPECS.read_text(encoding="utf-8"))
-    table["commands"]["SET_SPEED"]["mode"] = "steps"
-    path = tmp_path / "steps.json"
-    path.write_text(json.dumps(table), encoding="utf-8")
-    return path
-
-
-def test_steps_mode_uses_speed_provider(posts, tmp_path):
-    dispatcher = make_dispatcher(
-        locator=FakeLocator(), path=_steps_table(tmp_path), speed_provider=lambda: 1.0
-    )
+def test_steps_mode_uses_speed_provider(posts):
+    dispatcher = make_dispatcher(locator=FakeLocator(), speed_provider=lambda: 1.0)
     result = dispatcher.set_speed(1.3)  # round((1.3 - 1.0) / 0.1) == 3 steps up
     assert result.ok and result.detail == "posted"
     _wait_for_posts(posts, 3)
     time.sleep(0.05)
     assert len(posts) == 3  # exactly n step entries, no extras
-    assert all(post[1:] == (WM_USER, 0, 0) for post in posts)  # SPEED_UP placeholders
+    assert all(post[1:] == (WM_COMMAND, 0x2808, 0) for post in posts)  # SPEED_UP = 10248
 
 
-def test_steps_mode_negative_steps(posts, tmp_path):
-    dispatcher = make_dispatcher(
-        locator=FakeLocator(), path=_steps_table(tmp_path), speed_provider=lambda: 1.3
-    )
+def test_steps_mode_negative_steps(posts):
+    dispatcher = make_dispatcher(locator=FakeLocator(), speed_provider=lambda: 1.3)
     result = dispatcher.set_speed(1.0)  # 3 steps down
     assert result.ok
     _wait_for_posts(posts, 3)
     time.sleep(0.05)
     assert len(posts) == 3
+    assert all(post[1:] == (WM_COMMAND, 0x2807, 0) for post in posts)  # SPEED_DOWN = 10247
 
 
-def test_steps_cancelled_when_window_vanishes(posts, tmp_path):
+def test_steps_cancelled_when_window_vanishes(posts):
     # allow=3: result hwnd find + (worker find + dispatch find) for step 1 only.
     locator = DyingLocator(allow=3)
-    dispatcher = make_dispatcher(
-        locator=locator, path=_steps_table(tmp_path), speed_provider=lambda: 1.0
-    )
+    dispatcher = make_dispatcher(locator=locator, speed_provider=lambda: 1.0)
     result = dispatcher.set_speed(2.0)  # 10 steps requested; window dies after step 1
     assert result.ok
     _wait_for_posts(posts, 1)
@@ -399,16 +443,42 @@ def test_steps_cancelled_when_window_vanishes(posts, tmp_path):
     assert len(posts) == 1
 
 
-def test_steps_mode_without_provider_is_bad_value(posts, tmp_path):
-    dispatcher = make_dispatcher(path=_steps_table(tmp_path), speed_provider=None)
+def test_speed_belief_prevents_cumulative_drift(posts):
+    """The provider still reports 1.0 after we speed up (unreported 0x5015):
+    repeated identical targets must not re-apply their steps."""
+    dispatcher = make_dispatcher(speed_provider=lambda: 1.0)
+    assert dispatcher.set_speed(1.4).ok
+    _wait_for_posts(posts, 4)
+    time.sleep(0.05)
+    assert len(posts) == 4
+    assert dispatcher.set_speed(1.4).ok  # belief says 1.4 already: zero steps
+    assert dispatcher.step_speed(0.1).ok  # belief rides relative steps too
+    _wait_for_posts(posts, 5)
+    time.sleep(0.05)
+    assert len(posts) == 5  # only the +0.1 step was posted
+    assert posts[-1][1:] == (WM_COMMAND, 0x2808, 0)
+    # Absolute reset back to 1.0 walks the belief down again: 5 SPEED_DOWN posts.
+    assert dispatcher.set_speed(1.0).ok
+    _wait_for_posts(posts, 10)
+    time.sleep(0.05)
+    assert len(posts) == 10
+    assert all(post[1:] == (WM_COMMAND, 0x2807, 0) for post in posts[5:])
+
+
+def test_steps_mode_without_provider_is_bad_value(posts):
+    dispatcher = make_dispatcher(speed_provider=None)
     result = dispatcher.set_speed(1.3)
     assert not result.ok and result.detail == "bad_value"
     assert posts == []
     assert not dispatcher.step_speed(0.1).ok
 
 
-def test_direct_mode_step_speed_is_bad_value(posts):
-    dispatcher = make_dispatcher()  # shipped table is direct mode
+def test_direct_mode_step_speed_is_bad_value(posts, tmp_path):
+    # step_speed is steps-only by contract; a direct-mode table must refuse it
+    # even when a speed provider is present.
+    dispatcher = make_dispatcher(
+        path=_set_speed_table(tmp_path, mode="direct"), speed_provider=lambda: 1.0
+    )
     result = dispatcher.step_speed(0.1)
     assert not result.ok and result.detail == "bad_value"
 

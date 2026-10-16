@@ -50,22 +50,40 @@ M4_WIRE_ACTIONS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("CYCLE_ASPECT_RATIO", {}),
     ("CYCLE_AUDIO", {}),
     ("CYCLE_SUBS", {}),
-    ("SET_SPEED", {"multiplier": 1.5}),
+    # SET_SPEED is steps-mode (async0.1x posts racing a background thread), so it
+    # cannot hold M4's strict 1:1 send/log pairing; SEEK keeps the
+    # 10-distinct-actions x 3 shape and still travels as POT_SET_*.
+    ("SEEK", {"position_ms": 15_000}),
     ("SET_VOLUME", {"percent": 42}),
     ("FRAME_STEP", {"direction": "FORWARD"}),
 )
 M4_REPETITIONS = 3
-WM_USER_ACTIONS = frozenset({"SET_SPEED", "SET_VOLUME", "FRAME_STEP"})
+# Captured table (shared_specs/potplayer_wm_codes.json): nine of the ten M4
+# actions travel as WM_USER (POT_SET_* / POT_SEND_VIRTUAL_KEY); only
+# TOGGLE_FULLSCREEN remains a classic WM_COMMAND menu id.
+WM_USER_ACTIONS = frozenset(
+    {
+        "PLAY_PAUSE",
+        "PLAY",
+        "PAUSE",
+        "CYCLE_ASPECT_RATIO",
+        "CYCLE_AUDIO",
+        "CYCLE_SUBS",
+        "SEEK",
+        "SET_VOLUME",
+        "FRAME_STEP",
+    }
+)
 M4_TOTAL = len(M4_WIRE_ACTIONS) * M4_REPETITIONS  # 30
 M4_COMMAND_COUNT = (
     sum(1 for action, _ in M4_WIRE_ACTIONS if action not in WM_USER_ACTIONS) * M4_REPETITIONS
 )
 M4_USER_COUNT = M4_TOTAL - M4_COMMAND_COUNT
-# Exact lparams this harness dispatches (speed_milli 1500, percent 42,
-# frame_delta 1); lets M4 count dispatcher-origin WM_USERs only, ignoring
-# foreign (0,0) getter probes if another suite shares the system-wide
-# PotPlayer64 window namespace (Doc 46 §10 assumes an exclusive machine).
-M4_DISPATCH_LPARAMS = frozenset({1500, 42, 1})
+# Dispatcher-origin WM_USERs are the ones whose wparam is NOT one of the five
+# Doc 10 getter probes; foreign getter probes (should another suite share the
+# system-wide PotPlayer64 window namespace) are excluded the same way
+# (Doc 46 §10 assumes an exclusive machine).
+GETTER_WPARAMS = frozenset({0x5004, 0x5002, 0x5006, 0x5000, 0x5015})
 M4_P95_DISPATCH_MS = 100.0
 
 # --- M5 constants (Doc 46 §5: 60 s of TELEMETRY_SYNC) ----------------------
@@ -289,6 +307,15 @@ async def _wait_for_commands(mock: Any, count: int, budget_s: float = 3.0) -> No
     raise AssertionError(f"mock logged {len(mock.received_commands)} < {count} WM_COMMANDs")
 
 
+async def _wait_for_user_msgs(mock: Any, count: int, budget_s: float = 3.0) -> None:
+    deadline = time.monotonic() + budget_s
+    while time.monotonic() < deadline:
+        if len(mock.received_user_msgs) >= count:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"mock logged {len(mock.received_user_msgs)} < {count} WM_USERs")
+
+
 # ---------------------------------------------------------------------------
 # M4 — background WM_COMMAND dispatch (Blocking)
 # ---------------------------------------------------------------------------
@@ -332,10 +359,10 @@ async def test_m4_background_wm_command_dispatch(mock_potplayer: Any) -> None:
         details = mock_potplayer.received_user_details
         user_times = [
             stamp
-            for stamp, (_msg, _wparam, lparam) in zip(
+            for stamp, (_msg, wparam, _lparam) in zip(
                 mock_potplayer.received_user_times, details, strict=True
             )
-            if lparam in M4_DISPATCH_LPARAMS
+            if wparam not in GETTER_WPARAMS
         ]
         assert len(mock_potplayer.received_commands) == M4_COMMAND_COUNT, (
             f"expected {M4_COMMAND_COUNT} WM_COMMANDs, "
@@ -411,8 +438,9 @@ async def test_m5_telemetry_cadence_250ms(mock_potplayer: Any) -> None:
         inbox = _WsInbox(client)
         reply = await inbox.request("CMD_POTPLAYER", "PLAY", {})
         assert reply.get("payload", {}).get("delivered") is True, reply
-        await _wait_for_commands(mock_potplayer, 1)
-        assert mock_potplayer.playing is True, "PLAY must toggle the mock play-state bit"
+        # PLAY travels as POT_SET_PLAY_STATUS (WM_USER 0x5007, lparam 2).
+        await _wait_for_user_msgs(mock_potplayer, 1)
+        assert mock_potplayer.playing is True, "PLAY must set the mock play-state bit"
 
         # Cadence marker: the first delta proves position is advancing each tick.
         await inbox.wait_telemetry(
@@ -456,11 +484,9 @@ async def test_m5_telemetry_cadence_250ms(mock_potplayer: Any) -> None:
 @pytest.mark.asyncio
 async def test_m6_scrub_bar_sync_live_position(mock_potplayer: Any) -> None:
     """M6: 20 seek steps × 250 ms — telemetry position within ±250 ms of the mock."""
-    # The frozen placeholder table gives every WM_USER setter the identical
-    # (WM_USER, 0, value) query, so the mock cannot disambiguate SEEK from
-    # SET_VOLUME/SET_SPEED; this test only dispatches SEEK, and the value is
-    # applied to the position model through the mock's documented hook
-    # (a captured real-PotPlayer table would route it internally).
+    # This test only dispatches SEEK (POT_SET_CURRENT_TIME, WM_USER 0x5005);
+    # the lparam is applied to the position model through the mock's documented
+    # on_wm_user_value hook so the paused model sits exactly at the target.
     mock_potplayer.on_wm_user_value = mock_potplayer.set_position_ms
     stack = await _start_stack(mock_potplayer, with_poller=True)
     client: Any = None
@@ -494,7 +520,7 @@ async def test_m6_scrub_bar_sync_live_position(mock_potplayer: Any) -> None:
         seek_values = [
             lparam
             for _msg, _wparam, lparam in mock_potplayer.received_user_details
-            if lparam != 0  # getter queries are (WM_USER, 0, 0)
+            if lparam != 0  # getter probes always carry lparam 0
         ]
         expected = [M6_FIRST_TARGET_MS + step * 1_000 for step in range(M6_STEPS)]
         assert seek_values == expected, (
@@ -520,6 +546,7 @@ def test_harness_ws_actions_validate_against_shared_schema() -> None:
     """Every WS action the harness sends validates against ws_command_schema.json."""
     harness_sends: tuple[tuple[str, str, dict[str, Any]], ...] = (
         *(("CMD_POTPLAYER", action, payload) for action, payload in M4_WIRE_ACTIONS),
+        ("CMD_POTPLAYER", "SET_SPEED", {"multiplier": 1.5}),  # steps-mode, off the M4 wire
         ("CMD_POTPLAYER", "SEEK", {"position_ms": M6_FIRST_TARGET_MS}),
         ("CMD_MEDIA", "LIST_MEDIA", {}),
         ("CMD_MEDIA", "LAUNCH_MEDIA", {"path": r"C:\Movies\demo.mkv"}),

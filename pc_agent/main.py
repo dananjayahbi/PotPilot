@@ -521,7 +521,7 @@ async def run_agent(argv: list[str] | None = None) -> int:
                             "error": "E_BAD_PAYLOAD",
                             "detail": "enabled must be a boolean",
                         }
-                    result = dispatcher.dispatch(action, value=1 if enabled else 0)
+                    result = dispatcher.set_subtitles(enabled)
                 elif action == Action.SUB_SYNC_ADJUST:
                     result = dispatcher.adjust_subtitle_delay(int(payload["delta_ms"]))
                 else:

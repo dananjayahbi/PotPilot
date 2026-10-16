@@ -18,12 +18,12 @@ taskbar/Alt-Tab, and never activates: the "hidden, no focus stealing"
 guarantee of the spec with discoverability preserved. Nothing ever calls
 ``SetForegroundWindow``/``ShowWindow``.
 
-Frozen-table note: every getter in ``shared_specs/potplayer_wm_codes.json``
-carries the placeholder query ``(WM_USER, 0, 0)`` (status
-``capture_required``), so the window cannot tell getters apart by message
-fields; replies therefore cycle in Doc 10's ``GETTER_ORDER``. Setter messages
-all share ``(WM_USER, 0, value)``; tests that need a setter to move the model
-install :attr:`MockPotPlayerWindow.on_wm_user_value` (e.g. seek → position).
+Captured-table note: the real table in ``shared_specs/potplayer_wm_codes.json``
+routes getters as ``(WM_USER, wparam, 0)`` with distinct POT_GET_* wparams
+(0x5004/0x5002/0x5006/0x5000/0x5015), so replies are keyed directly by
+wparam. ``POT_SET_PLAY_STATUS`` (0x5007) applies lparam 0/1/2 as
+toggle/paused/running; values delivered to other setters are forwarded to the
+optional ``on_wm_user_value`` callback (e.g. seek → position).
 """
 
 from __future__ import annotations
@@ -37,8 +37,6 @@ import win32api
 import win32gui
 import win32process
 
-from pc_agent.potplayer.telemetry_poller import GETTER_ORDER
-
 CLASS_NAME = "PotPlayer64"
 WINDOW_TITLE = "PotPlayer64 (QA harness)"
 
@@ -47,11 +45,20 @@ WM_DESTROY = 0x0002
 WM_COMMAND = 0x0111
 WM_USER = 0x0400
 
+# Real-table POT_* wparams (shared_specs/potplayer_wm_codes.json).
+GETTER_WPARAMS: dict[int, str] = {
+    0x5004: "GET_POSITION_MS",
+    0x5002: "GET_DURATION_MS",
+    0x5006: "GET_PLAY_STATE",
+    0x5000: "GET_VOLUME",
+    0x5015: "GET_SPEED",
+}
+SET_PLAY_STATUS = 0x5007  # lparam 0 toggle / 1 paused / 2 running
+
 WS_VISIBLE = 0x10000000
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_NOACTIVATE = 0x08000000
 
-GETTER_COUNT = len(GETTER_ORDER)  # Doc 10 getter table: 5 fixed queries
 _STATE_PLAYING = 2
 _STATE_PAUSED = 1
 _READY_TIMEOUT_S = 5.0
@@ -81,7 +88,6 @@ class MockPotPlayerWindow:
         self._user_msgs: list[tuple[int, int]] = []
         self._user_times: list[float] = []
         self._user_details: list[tuple[int, int, int]] = []
-        self._getter_index = 0
         self._position_ms = max(0, int(position_ms))
         self._duration_ms = max(0, int(duration_ms))
         self._playing = bool(playing)
@@ -279,17 +285,27 @@ class MockPotPlayerWindow:
             self._user_msgs.append((WM_USER, wparam))
             self._user_times.append(time.monotonic())
             self._user_details.append((WM_USER, wparam, lparam))
-            if wparam == 0 and lparam == 0:
-                index = self._getter_index
-                self._getter_index = (index + 1) % GETTER_COUNT
-                return self._getter_value_locked(index)
+            getter_name = GETTER_WPARAMS.get(wparam)
+            if getter_name is not None and lparam == 0:
+                return self._getter_value_locked(getter_name)
+            if wparam == SET_PLAY_STATUS:
+                self._apply_play_status_locked(lparam)
+                return 1
             callback = self.on_wm_user_value
         if callback is not None:
             callback(lparam)  # outside the lock: callback may call set_position_ms
         return 1  # non-zero LRESULT = "handled" (ack path, Doc 09)
 
-    def _getter_value_locked(self, index: int) -> int:
-        name = GETTER_ORDER[index]
+    def _apply_play_status_locked(self, value: int) -> None:
+        """POT_SET_PLAY_STATUS semantics: 0 toggle, 1 paused, 2 running."""
+        if value == 0:
+            self._set_playing_locked(not self._playing)
+        elif value == 1:
+            self._set_playing_locked(False)
+        elif value == 2:
+            self._set_playing_locked(True)
+
+    def _getter_value_locked(self, name: str) -> int:
         if name == "GET_POSITION_MS":
             return self._position_locked()
         if name == "GET_DURATION_MS":

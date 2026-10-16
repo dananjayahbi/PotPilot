@@ -221,6 +221,10 @@ def _install_fakes(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
             self.calls.append(("adjust_subtitle_delay", delta_ms))
             return self._result()
 
+        def set_subtitles(self, enabled: bool) -> _Dispatch:
+            self.calls.append(("set_subtitles", enabled))
+            return self._result()
+
     monkeypatch.setattr(wm_dispatcher, "WmDispatcher", FakeDispatcher)
 
     # --- Doc 23 audio --------------------------------------------------------
