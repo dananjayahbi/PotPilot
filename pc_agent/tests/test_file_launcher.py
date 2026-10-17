@@ -201,7 +201,7 @@ def test_rejects_directory(tmp_path: Path, spawn: SimpleNamespace) -> None:
     assert spawn.argvs == []
 
 
-def test_builds_launch_command_with_fullscreen_flag(
+def test_builds_launch_command_with_current_and_fullscreen_flags(
     tmp_path: Path, spawn: SimpleNamespace
 ) -> None:
     exe = _exe(tmp_path)
@@ -218,7 +218,7 @@ def test_builds_launch_command_with_fullscreen_flag(
         return result, reply
 
     result, reply = asyncio.run(scenario())
-    expected = [str(exe), str(video), "/fullscreen"]
+    expected = [str(exe), str(video), "/current", "/fullscreen"]
     assert spawn.argvs == [expected, expected]  # argv list only, no shell string (§8)
     assert result.launched is True
     assert result.hwnd == 12345
@@ -419,7 +419,7 @@ def test_grace_timeout_keeps_player_alive_and_reaps_in_background(
     result = asyncio.run(launcher.launch(str(video)))
     assert result.launched is True
     assert result.hwnd == 321
-    assert spawn.argvs == [[str(exe), str(video), "/fullscreen"]]
+    assert spawn.argvs == [[str(exe), str(video), "/current", "/fullscreen"]]
     assert ("start", str(video)) in spawn.events
     assert ("end", str(video)) not in spawn.events  # grace expired while running
 

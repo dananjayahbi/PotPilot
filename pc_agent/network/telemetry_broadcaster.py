@@ -126,8 +126,11 @@ def snapshot_to_payload(
     """Map a Doc 10 ``TelemetrySnapshot`` (or dict/None) to the 7 base wire keys.
 
     ``file_title`` priority: an explicit snapshot value (the poller may carry
-    one) → derived from a fresh window-title read when the window is alive
-    and healthy → ``None`` when idle/unavailable (Doc 03 §5.6).
+    one) → derived from a fresh window-title read whenever the window handle
+    is alive → ``None`` when idle/unavailable (Doc 03 §5.6).  The reader is
+    keyed on the hwnd alone: a single slow WM getter must not blank the
+    playing title for a tick (manual-playback detection stayed hidden behind
+    that gate, 2026-10-17).
     """
     if snapshot is None:
         return {
@@ -150,9 +153,8 @@ def snapshot_to_payload(
         found = bool(field("hwnd", 0))
     file_title = field("file_title", None)
     if file_title is None and found:
-        healthy = field("healthy", None)
         hwnd = int(field("hwnd", 0) or 0)
-        if hwnd and healthy is not False:
+        if hwnd:
             reader = title_reader if title_reader is not None else _read_window_title
             try:
                 file_title = title_from_window(reader(hwnd))
@@ -324,6 +326,7 @@ class TelemetryBroadcaster:
         except Exception:
             self._clients.discard(ws)  # dead socket; loop survives (Doc 18 §7)
             log.warning("telemetry client failed mid-send; unregistered", exc_info=True)
+            await _close_session_quietly(ws)
 
     async def _push_full_state(self, ws: Any) -> None:
         state = dict(self._last_merged)
@@ -335,6 +338,7 @@ class TelemetryBroadcaster:
         except Exception:
             self._clients.discard(ws)
             log.warning("initial FULL_STATE push failed; client unregistered", exc_info=True)
+            await _close_session_quietly(ws)
 
     def _warn_provider(self, name: str) -> None:
         """Log at most one warning per source per minute (Doc 18 §7)."""
@@ -350,6 +354,24 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return 0
     return value
+
+
+async def _close_session_quietly(ws: Any) -> None:
+    """Best-effort session close after a failed telemetry send.
+
+    Unregistering alone left the WS session open with telemetry silenced —
+    the client sat idle until its liveness watchdog killed the link seconds
+    later (connect/disconnect churn, 2026-10-17).  Closing here hands the
+    reconnect to the client's normal backoff immediately.  Best-effort:
+    fakes and already-dead sockets must never break the tick.
+    """
+    close = getattr(ws, "close", None)
+    if close is None:
+        return
+    try:
+        await asyncio.wait_for(close(), timeout=SEND_TIMEOUT_S)
+    except Exception:
+        pass  # already gone — the client's watchdog/backoff covers it
 
 
 __all__ = [

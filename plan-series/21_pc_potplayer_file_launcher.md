@@ -35,6 +35,7 @@
 ```python
 ACT_LAUNCH_MEDIA: str = "LAUNCH_MEDIA"
 FULLSCREEN_SWITCH: str = "/fullscreen"
+CURRENT_SWITCH: str = "/current"  # route the file into the RUNNING instance (see §1.1)
 HWND_WAIT_TIMEOUT_S: float = 5.0
 HWND_POLL_INTERVAL_S: float = 0.1
 DEFAULT_PLAYER_PATH: str  # fallback install path; overridden by config (see §10 A1)
@@ -75,7 +76,7 @@ flowchart TD
     B -->|no| X1[E_FILE_NOT_FOUND /<br/>E_UNSUPPORTED_TYPE / E_BAD_PAYLOAD]
     B -->|yes| C{resolve_player_exe}
     C -->|missing| X2[E_PLAYER_NOT_FOUND]
-    C -->|ok| D["subprocess.run [exe, path, /fullscreen]<br/>(to_thread)"]
+    C -->|ok| D["subprocess.run [exe, path, /current, /fullscreen]<br/>(to_thread)"]
     D -->|spawn error| X3[E_LAUNCH_FAILED]
     D -->|ok| G["Poll Doc 08 locator ≤5 s"]
     G -->|timeout| F["RESULT {ok:true}<br/>log: snapped:false"]
@@ -99,7 +100,7 @@ Fullscreen launch + primary-monitor snap are implicit side effects (Doc 03 §5.5
 
 Error payload: `{"ok": false, "error": <code>, "detail": str}` with `code` ∈ `E_FILE_NOT_FOUND`, `E_UNSUPPORTED_TYPE`, `E_PLAYER_NOT_FOUND`, `E_LAUNCH_FAILED`, `E_BAD_PAYLOAD`.
 
-**Constants (exact names):** `ACT_LAUNCH_MEDIA = "LAUNCH_MEDIA"`, `FULLSCREEN_SWITCH = "/fullscreen"`, `HWND_WAIT_TIMEOUT_S`, `HWND_POLL_INTERVAL_S`, `DEFAULT_PLAYER_PATH`, `ERR_FILE_NOT_FOUND`, `ERR_UNSUPPORTED_TYPE`, `ERR_PLAYER_NOT_FOUND`, `ERR_LAUNCH_FAILED`, `ERR_BAD_PAYLOAD`. Extension set is **imported** from Doc 20 (`VIDEO_EXTENSIONS`) — never redefined.
+**Constants (exact names):** `ACT_LAUNCH_MEDIA = "LAUNCH_MEDIA"`, `FULLSCREEN_SWITCH = "/fullscreen"`, `CURRENT_SWITCH = "/current"`, `HWND_WAIT_TIMEOUT_S`, `HWND_POLL_INTERVAL_S`, `DEFAULT_PLAYER_PATH`, `ERR_FILE_NOT_FOUND`, `ERR_UNSUPPORTED_TYPE`, `ERR_PLAYER_NOT_FOUND`, `ERR_LAUNCH_FAILED`, `ERR_BAD_PAYLOAD`. Extension set is **imported** from Doc 20 (`VIDEO_EXTENSIONS`) — never redefined.
 
 No new `TELEMETRY_SYNC` keys: after a successful launch Doc 10 picks up the new `file_title`/`position_ms` and Doc 18 broadcasts deltas as usual.
 
@@ -115,7 +116,7 @@ No new `TELEMETRY_SYNC` keys: after a successful launch Doc 10 picks up the new 
 
 **External** — stdlib only: `asyncio`, `subprocess`, `os`, `time`, `dataclasses`.
 
-**Platform** — Windows process creation (`CreateProcessW` via `subprocess`); PotPlayer64 command-line switches (`/fullscreen`); documented single-instance file hand-off.
+**Platform** — Windows process creation (`CreateProcessW` via `subprocess`); PotPlayer command-line switches (`/fullscreen`, `/current`); documented single-instance file hand-off.
 
 ## 7. Edge Cases & Failure Handling
 - **Path missing on disk (deleted after indexing)** — `E_FILE_NOT_FOUND`; Doc 45 shows "file missing, rescan?" toast; no process spawned.
@@ -133,7 +134,7 @@ No new `TELEMETRY_SYNC` keys: after a successful launch Doc 10 picks up the new 
 - `LAUNCH_MEDIA` with an existing `.mkv` path → PotPlayer opens it **fullscreen** on the primary monitor; response `{"ok":true}`; internal result records `snapped:true` and a non-zero `hwnd`.
 - Launch latency (subprocess spawn → HWND observed) logged in `elapsed_ms`; end-to-end `launch()` < 5 s on a warm system.
 - `.txt`, a directory, and a nonexistent path produce the exact error codes from §5, with no process spawned.
-- The wire payload is exactly `{"path"}` — `/fullscreen` and the Doc 11 snap always run; no flags cross the wire (fast path still < 1 s).
+- The wire payload is exactly `{"path"}` — `/current` + `/fullscreen` and the Doc 11 snap always run; no flags cross the wire (fast path still < 1 s).
 - After launch, Doc 18 telemetry shows `file_title` changing to the new file within 2 launches × 250 ms ticks.
 - With wrong `potplayer_exe_path`, response is `E_PLAYER_NOT_FOUND` naming the bad path; with correct config, the configured exe is used (verified via process command line).
 - No shell string interpolation anywhere (argv list only).
@@ -143,7 +144,7 @@ No new `TELEMETRY_SYNC` keys: after a successful launch Doc 10 picks up the new 
 - `test_rejects_unsupported_extension` — `.txt` → `E_UNSUPPORTED_TYPE`.
 - `test_rejects_missing_file` — deleted path → `E_FILE_NOT_FOUND`.
 - `test_rejects_directory` — dir path → `E_UNSUPPORTED_TYPE`/`E_FILE_NOT_FOUND`.
-- `test_builds_launch_command_with_fullscreen_flag` — argv == `[exe, path, "/fullscreen"]` always (no wire flags; implicit side effect per Doc 03).
+- `test_builds_launch_command_with_current_and_fullscreen_flags` — argv == `[exe, path, "/current", "/fullscreen"]` always (no wire flags; implicit side effect per Doc 03).
 - `test_uses_configured_player_path_over_default` — config path wins; both-missing → `E_PLAYER_NOT_FOUND`.
 - `test_snap_invoked_after_hwnd_resolved` — fake locator returns hwnd after 2 polls → `snapped:true`, snapper called once.
 - `test_timeout_returns_launched_without_snap` — locator always `None` → `launched:true, snapped:false`, bounded by `hwnd_timeout_s` (fake clock).
@@ -157,5 +158,6 @@ No new `TELEMETRY_SYNC` keys: after a successful launch Doc 10 picks up the new 
 - **A2:** `potplayer_exe_path` is a new config key beyond Doc 26's catalog baseline (ports/token/movie dirs/startup) — registered as an additive key; Doc 24's settings surface should expose it.
 - **A3:** PotPlayer's single-instance hand-off for a second `PotPlayer64.exe <file>` invocation is relied upon (default PotPlayer behavior). If a user disables single-instance, the result is still correct — a new fullscreen window that Doc 08 will locate.
 - **A4:** `/fullscreen` is the accepted PotPlayer command-line switch (per PotPlayer documentation). A fallback (`config["potplayer_fullscreen"]=false` + a Doc 09 fullscreen toggle after HWND-ready) is specced but not implemented unless field testing disproves the switch.
+- **A5 (2026-10-17 field fix):** `/current` is appended after the file so a **warm** launch feeds the already-running instance. Live testing proved a plain warm spawn opens a second window that churns and closes itself 10–20 s later while the original keeps the old file — users read that as "it opens then closes PotPlayer". `/current` switches the running instance's file in ~2 s (same window, single instance) and behaves like a normal cold start when nothing is running; the "Multiple instances" preference cannot defeat it (PotPlayer `CmdLine.txt`).
 - **A5:** "Primary monitor snapping" reuses Doc 11 verbatim; no extra geometry logic lives here.
 - **Q1 (open):** Should the launcher optionally pre-warm PotPlayer at agent startup (spawn with no file) to cut first-launch latency? Deferred — measured cold start is expected < 2 s on the target bedroom PC.

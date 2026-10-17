@@ -546,7 +546,7 @@ void main() {
   });
 
   group('liveness watchdog', () {
-    test('5 s of silence force-reconnects; inbound frames keep it alive',
+    test('8 s of silence force-reconnects; inbound frames keep it alive',
         () async {
       final WsTestServer server = await WsTestServer.start();
       addTearDown(server.stop);

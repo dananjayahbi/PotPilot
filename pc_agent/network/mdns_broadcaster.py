@@ -8,7 +8,10 @@ secret never touches mDNS — discovery is unauthenticated by design (Doc 15
 authenticates at the WS handshake).
 
 ``collect_lan_ipv4()`` lives here as the single IP-enumeration implementation
-shared repo-wide (Docs 16/17).
+shared repo-wide (Docs 16/17).  mDNS itself advertises only the **primary**
+(default-route) address via :func:`primary_lan_ipv4` — multiple A records
+flipped the phone's resolver between NICs and caused reconnect storms
+(2026-10-17); the full list stays available for QR/UDP pairing candidates.
 """
 
 from __future__ import annotations
@@ -77,6 +80,31 @@ def collect_lan_ipv4() -> list[str]:
     return sorted(found)
 
 
+def primary_lan_ipv4(fallback_ips: list[str] | None = None) -> str | None:
+    """Single best LAN IPv4 to *advertise* over mDNS (Doc 16).
+
+    The default-route source IP (UDP probe) wins when usable — it is the
+    address peers on the home LAN can actually reach, and it is stable even
+    when virtual adapters (Hyper-V/WSL, VirtualBox, hotspots) come and go.
+    Falls back to the first usable entry of ``fallback_ips`` (usually
+    :func:`collect_lan_ipv4`).  Advertising exactly one address stops the
+    multi-A-record flip-flop that made the phone's resolver oscillate and
+    tear down live sessions (connection-flapping root cause, 2026-10-17).
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("1.1.1.1", 80))
+            ip = probe.getsockname()[0]
+            if _is_usable_ipv4(ip):
+                return ip
+    except OSError:
+        logger.debug("UDP probe for primary LAN IPv4 failed", exc_info=True)
+    for ip in fallback_ips or ():
+        if _is_usable_ipv4(ip):
+            return ip
+    return None
+
+
 def sanitize_hostname(name: str) -> str:
     """Reduce ``name`` to a DNS-label-safe service instance label."""
     normalized = unicodedata.normalize("NFKD", name) if name else ""
@@ -127,7 +155,8 @@ class MdnsBroadcaster:
         """Register the service (best-effort) and begin the refresh loop."""
         if self._task is not None:
             return  # idempotent
-        await self._register_best_effort(collect_lan_ipv4())
+        primary = primary_lan_ipv4(collect_lan_ipv4())
+        await self._register_best_effort([primary] if primary else [])
         self._task = asyncio.create_task(self._refresh_loop())
 
     async def stop(self) -> None:
@@ -156,11 +185,12 @@ class MdnsBroadcaster:
             self._zc = None
 
     async def refresh(self) -> bool:
-        """Recompute LAN IPs; re-announce when the set changed (True = changed)."""
-        ips = collect_lan_ipv4()
-        if not ips:
+        """Recompute the primary LAN IP; re-announce when it changed (True = changed)."""
+        primary = primary_lan_ipv4(collect_lan_ipv4())
+        if primary is None:
             logger.warning("no LAN IPv4 for mDNS; will retry next refresh tick")
             return False
+        ips = [primary]
         if not self._registered or self._info is None:
             changed = await self._register_best_effort(ips)
             if changed:

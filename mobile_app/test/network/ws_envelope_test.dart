@@ -182,7 +182,7 @@ void main() {
       expect(kBackoffMultiplier, 2.0);
       expect(kBackoffMax, const Duration(seconds: 15));
       expect(kJitterRatio, 0.20);
-      expect(kLivenessTimeout, const Duration(seconds: 5));
+      expect(kLivenessTimeout, const Duration(seconds: 8));
       expect(kConnectTimeout, const Duration(seconds: 5));
       expect(kMdnsFallbackAfter, 3);
       expect(kSendQueueCapacity, 32);

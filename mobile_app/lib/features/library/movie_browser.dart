@@ -56,11 +56,18 @@ const Duration kLibraryRescanRequeryDelay = Duration(seconds: 2);
 /// Reply timeout for index fetches — a miss is treated as PC-offline.
 const Duration kLibraryFetchTimeout = Duration(seconds: 5);
 
-/// Reply timeout for `RESCAN_MEDIA` / `LAUNCH_MEDIA` acks (§7).
-const Duration kLibraryAckTimeout = Duration(seconds: 2);
+/// Reply timeout for `RESCAN_MEDIA` / `LAUNCH_MEDIA` acks (§7).  The PC
+/// acks only after spawn + HWND + snap, and a cold PotPlayer takes up to
+/// ~5 s to expose its window (Doc 21 E2E budget), so this must clear that
+/// budget — the old 2 s timed out on every cold launch and reported a
+/// healthy PC as failed (2026-10-17).
+const Duration kLibraryAckTimeout = Duration(seconds: 6);
 
-/// Telemetry confirmation window after a launch ack (§4.3.3).
-const Duration kLibraryConfirmTimeout = Duration(seconds: 2);
+/// Telemetry confirmation window after a launch ack (§4.3.3).  Covers the
+/// window-title lag: cold start loads the file title a few seconds after
+/// the HWND appears, and a warm `/current` hand-off switches the title
+/// ~2 s after the ack (2026-10-17 live timing).
+const Duration kLibraryConfirmTimeout = Duration(seconds: 8);
 
 /// Double-tap coalescing window for the same path (§7).
 const int kLibraryLaunchCoalesceMs = 1000;
@@ -898,7 +905,11 @@ class LibraryNotifier extends AsyncNotifier<List<MovieEntry>> {
       return false;
     } on _LibraryOffline {
       _notice = 'PC not responding — launch failed';
-      _offline = true;
+      // Only a dead transport means offline — a reply timeout on a live
+      // session must not pin the PC-offline banner (2026-10-17).
+      if (_socket.state != WsConnectionState.connected) {
+        _offline = true;
+      }
       _emit();
       return false;
     } finally {
@@ -1093,8 +1104,15 @@ class MovieBrowserScreen extends ConsumerWidget {
       ),
     );
 
-    bool nowPlaying(MovieEntry entry) =>
-        telemetry.$1 == entry.title && telemetry.$2 && telemetry.$3 != false;
+    bool nowPlaying(MovieEntry entry) {
+      final String? fileTitle = telemetry.$1;
+      // Suffix-aware match (same rule as confirmation): PotPlayer titles
+      // carry context prefixes and the telemetry title is a stem.
+      return fileTitle != null &&
+          libraryTitleMatches(fileTitle, entry.title) &&
+          telemetry.$2 &&
+          telemetry.$3 != false;
+    }
 
     return Scaffold(
       appBar: AppBar(

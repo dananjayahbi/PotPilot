@@ -79,7 +79,7 @@ class MovieBrowserScreen extends ConsumerWidget { /* build per §4.4 */ }
 **4.3 Launch flow**
 1. Tap card → optimistic UI: card shows "Launching…" spinner; `launch()` sends `LAUNCH_MEDIA` (`{path}` only).
 2. Doc 14 routes to Doc 21 → `PotPlayer64.exe` opens the file fullscreen + snaps the primary monitor.
-3. Confirmation: next `TELEMETRY_SYNC` (≤ 250 ms) `file_title` matches the entry → card becomes "Now Playing" (dim amber ring); mismatch/timeout 2 s → error snackbar, card reverts.
+3. Confirmation: next `TELEMETRY_SYNC` (≤ 250 ms) `file_title` matches the entry → card becomes "Now Playing" (dim amber ring); mismatch/timeout 8 s → error snackbar, card reverts (window covers Doc 21's cold-start title lag, 2026-10-17).
 
 ```mermaid
 sequenceDiagram
@@ -164,7 +164,7 @@ All envelopes use the frozen shape `{"id":"uuid-v4","type":"CMD_MEDIA","action":
 
 **Automated — `mobile_app/test/movie_browser_test.dart`**
 - Fake WS client; assert exact envelope JSON for `LIST_MEDIA` (paging offsets 0/200/…), `RESCAN_MEDIA` → `RESCAN_MEDIA_RESULT {"ok":true,"queued":true}` → re-query, `LAUNCH_MEDIA` (path only), and correlation-guard drops of superseded ids.
-- `fake_async`: 200 ms search debounce (3 fast keystrokes → one filter pass, zero PC calls); launch-confirm flow driven by injecting a `TELEMETRY_SYNC` state update; 2 s launch-timeout snackbar.
+- `fake_async`: 200 ms search debounce (3 fast keystrokes → one filter pass, zero PC calls); launch-confirm flow driven by injecting a `TELEMETRY_SYNC` state update; 6 s launch-ack timeout snackbar (Doc 21 cold-start budget).
 - State rendering: empty index / no-match / offline-retry via pumped widget tests (OLED theme applied).
 - Filter+sort matrix on a fixture of 30 `MovieEntry`s (substring case-insensitivity, three sorts, SRT badge flag).
 - Double-tap coalescing: two taps < 1 s → one `LAUNCH_MEDIA`.
@@ -183,7 +183,7 @@ All envelopes use the frozen shape `{"id":"uuid-v4","type":"CMD_MEDIA","action":
 - No thumbnails: Doc 20's contract extracts only size/modified/SRT — cards are typographic (consistent with the OLED night theme).
 - Client-side filtering with full-index cache; server-side query fallback above 5 000 entries.
 - Sort chips persisted under `library_sort` `shared_preferences` key owned by this doc (Doc 34 owns pairing/auth/sensitivity/startup-tab keys only).
-- Launch confirmation window is 2 s; fullscreen + primary snap are implicit `LAUNCH_MEDIA` side effects (no wire flags).
+- Launch ack timeout is 6 s and the confirmation window is 8 s (Doc 21 cold-start HWND/title budget; 2026-10-17 revision — the original 2 s/2 s timed out on healthy cold launches); fullscreen + primary snap are implicit `LAUNCH_MEDIA` side effects (no wire flags).
 
 **Open questions**
 - Per-file resume-position ("continue watching") would need a PotPlayer-bookmark contract between Docs 10/09 — deferred, not part of the frozen telemetry schema.

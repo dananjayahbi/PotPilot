@@ -348,10 +348,13 @@ def test_file_title_derived_from_live_window_title() -> None:
     assert payload["file_title"] == "Inception (2010)"  # scanner-style stem
     assert calls == [42]  # exactly one cheap GetWindowText per payload build
 
-    # Unhealthy snapshot: no window read at all — the wire value stays null.
+    # Degraded (a slow WM getter) still reads the live title: one flaky getter
+    # must not blank playback detection for the tick (2026-10-17).
     degraded = SimpleNamespace(**{**vars(snapshot), "healthy": False})
-    assert snapshot_to_payload(degraded, title_reader=reader)["file_title"] is None
-    assert calls == [42]
+    assert snapshot_to_payload(degraded, title_reader=reader)["file_title"] == (
+        "Inception (2010)"
+    )
+    assert calls == [42, 42]
 
     # Explicit snapshot value (a title-carrying poller) always wins.
     explicit = SimpleNamespace(**{**vars(snapshot), "file_title": "explicit"})
@@ -360,7 +363,7 @@ def test_file_title_derived_from_live_window_title() -> None:
     # potplayer_found:false / no hwnd → nothing to read.
     missing = SimpleNamespace(**{**vars(snapshot), "hwnd": 0, "potplayer_found": False})
     assert snapshot_to_payload(missing, title_reader=reader)["file_title"] is None
-    assert calls == [42]
+    assert calls == [42, 42]
 
 
 def test_title_from_window_parsing() -> None:

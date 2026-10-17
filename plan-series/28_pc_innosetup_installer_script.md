@@ -18,6 +18,7 @@ Out of scope:
 
 **Creates (create-only):**
 - `pc_agent/installer/setup.iss`.
+- `pc_agent/installer/maintenance_mode.iss` — repair/upgrade selection code included from `setup.iss`'s `[Code]`.
 
 **Reads / touches (owned by other docs):**
 - `pc_agent/dist/PotPilotAgent/**` — payload consumed via `[Files]` ([27](27_pc_pyinstaller_build_spec.md)).
@@ -31,7 +32,7 @@ InnoSetup directives are the contract; the externally visible surface:
 
 | Directive / symbol | Value |
 |---|---|
-| `AppId` | `{{7C3A1E52-9D4B-4C7A-B6E0-5A1F0C2D8E91}` (stable GUID — fixed once, never change) |
+| `AppId` | `{{7C3A1E52-9D4B-4C7A-B6E0-5A1F0C2D8E91}` via `AppId={#AppGuidEscaped}` (stable GUID — fixed once, never change; `AppGuid` is the single-brace form used by `[Code]`) |
 | `AppName` / `AppVersion` | `PotPilot` / injected from a `Version` preprocessor define |
 | `DefaultDirName` | `{autopf}\PotPilot` (→ `C:\Program Files\PotPilot` on x64) |
 | `OutputBaseFilename` | `PotPilot_Setup` |
@@ -53,19 +54,22 @@ Compile interface:
 4. `[Icons]` creates Start-Menu and Desktop entries pointing at `{app}\PotPilotAgent.exe` with `WorkingDir: {app}`.
 5. `[Code]` `CurStepChanged(ssPostInstall)` runs `netsh advfirewall` twice (UDP 50505, TCP 50506) via `Exec`, checking each exit code; failures produce a non-fatal warning dialog with a "re-run as admin" hint — install still completes.
 6. `[Code]` `CurUninstallStepChanged(ssUninstall)` deletes both firewall rules by name and leaves `%APPDATA%\PotPilot` intact (documented user-data policy).
-7. `[Run]` offers the post-install "Launch PotPilot" checkbox (`Flags: nowait postinstall skipifsilent`), so an unattended `/SILENT` install never pops a window.
+7. `[Run]` offers the post-install "Launch PotPilot" checkbox (`Flags: nowait postinstall`), so the agent also comes back up after an **unattended `/SILENT` upgrade** (the pre-copy `KillAgent()` stopped it).
 8. The installer performs **no** config seeding; first run lets the agent create `%APPDATA%\PotPilot\config.json` with Doc 26 defaults.
+9. **In-place upgrade / repair (2026-10-17, `maintenance_mode.iss`):** when the uninstall key shows a previous install, a wizard page right after Welcome offers **Upgrade** (default — files copied over, nothing uninstalled) or **Repair** (re-copies files, force-checks the shortcut tasks, re-adds firewall rules). `/REPAIR` (also `-REPAIR`/`--REPAIR`) preselects repair, e.g. `/SILENT /REPAIR`. `CurStepChanged(ssInstall)` runs `taskkill /IM PotPilotAgent.exe /F` before `[Files]` so a live agent can't lock the payload, and `AppMutex=PotPilotAgentSingleInstance` matches `_INSTANCE_MUTEX_NAME` in `main.py` so Inno's `CloseApplications` detection works. `%APPDATA%\PotPilot` is untouched by every mode.
 
 Preprocessor defines (top of `setup.iss`):
 
 ```iss
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.2.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist\PotPilotAgent"
 #endif
 #define AppExe "PotPilotAgent.exe"
+#define AppGuid "{7C3A1E52-9D4B-4C7A-B6E0-5A1F0C2D8E91}"          // [Code] form
+#define AppGuidEscaped "{{7C3A1E52-9D4B-4C7A-B6E0-5A1F0C2D8E91}"   // [Setup] form
 ```
 
 Key excerpts (each ≤ 25 lines):
@@ -92,7 +96,7 @@ Name: "{autoprograms}\PotPilot"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}
 Name: "{autodesktop}\PotPilot";  Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch PotPilot"; \
-  Flags: nowait postinstall skipifsilent
+  Flags: nowait postinstall
 ```
 
 `[Code]` firewall helpers (Pascal signatures; bodies execute `netsh` hidden and aggregate failures):
@@ -152,7 +156,7 @@ Matching delete on uninstall: `netsh advfirewall firewall delete rule name="PotP
 - Firewall rule denied (UAC declined / policy lockdown) → `Exec` exit code ≠ 0 → non-fatal `MsgBox` with manual `netsh` commands; install continues, agent still binds but phone cannot connect until rules are added manually.
 - `netsh` not on PATH (hardened PATH) → invoke via `%WinDir%\System32\netsh.exe` full path.
 - Reinstall/upgrade → `netsh add rule` with the same name replaces the existing rule (idempotent); no duplicate rules accumulate.
-- App already running during upgrade → `CloseApplications=yes` prompts to close; silent install force-closes via the documented `AppMutex`/process close.
+- App already running during upgrade → `CurStepChanged(ssInstall)` taskkills `PotPilotAgent.exe` before `[Files]` copies (and `AppMutex=PotPilotAgentSingleInstance` lets `CloseApplications` detect the running agent); silent installs force-close the same way.
 - `dist/PotPilotAgent/` missing (spec not built) → `ISCC` fails with a clear "Source files not found" error; build order enforced by the Session 3 plan.
 - User declines the autostart task → no `HKCU\...\Run\PotPilot` value written; in-app toggle still works later.
 - Uninstall while agent running → `[UninstallRun]`/close step ends `PotPilotAgent.exe` before removing files (tray icon disappears with process).
@@ -173,7 +177,7 @@ Matching delete on uninstall: `netsh advfirewall firewall delete rule name="PotP
 
 ## 9. Test Plan
 
-- `pc_agent/tests/installer/test_iss_static.py` — textual asserts on `setup.iss`: `PrivilegesRequired=admin`, `ArchitecturesInstallIn64BitMode=x64compatible`, both firewall rule names present with correct `localport`/`protocol`/`dir=in`/`remoteip=localsubnet`, matching delete strings, `postinstall skipifsilent` on the launch entry.
+- `pc_agent/tests/installer/test_iss_static.py` — textual asserts on `setup.iss`: `PrivilegesRequired=admin`, `ArchitecturesInstallIn64BitMode=x64compatible`, both firewall rule names present with correct `localport`/`protocol`/`dir=in`/`remoteip=localsubnet`, matching delete strings, `postinstall` on the launch entry (no `skipifsilent` — silent upgrades must relaunch), maintenance include present.
 - `pc_agent/tests/installer/test_iss_paths.py` — asserts `DefaultDirName`, `OutputBaseFilename=PotPilot_Setup`, `[Files]` `Source` points at `dist\PotPilotAgent`, icon path resolves relative to the `.iss`.
 
 Manual/installer smoke (automation impractical for real `netsh`/Explorer):

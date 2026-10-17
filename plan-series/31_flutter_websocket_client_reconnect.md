@@ -92,7 +92,7 @@ stateDiagram-v2
 3. Auth is **connection-level**: the token rides the upgrade URL (`?auth=<32-hex>`, 03 §4.2). An HTTP 401 (status surfaced in the connect exception) ⇒ `authRejected` (terminal until caller retries); any other connect error ⇒ `backoff`.
 4. On 101 upgrade → `connected`, reset `attempt = 0`, flush the bounded outbound queue in FIFO order, emit `stateChanges`. Success is confirmed by the server's initial `TELEMETRY_SYNC` snapshot (sent on every connect, 03 §4.2); its arrival arms the liveness watchdog.
 5. Pump the inbound stream through the codec: `parseMessage(raw)` → `WsMessage` → push to `envelopes`; `FormatException` (malformed frame) → count + drop, never throw.
-6. **Liveness watchdog:** a resettable timer of `kLivenessTimeout = 5 s`; any inbound frame (expected cadence: `TELEMETRY_SYNC` every 250 ms) resets it; expiry ⇒ treat as dead link → force close → `backoff`. This is what actually detects half-open TCP after AP roaming.
+6. **Liveness watchdog:** a resettable timer of `kLivenessTimeout = 8 s`; any inbound frame (active deltas; `FULL_STATE` at most every 5.0 s when idle — the old 5 s raced that cadence and reconnected healthy idle links, 2026-10-17 fix) resets it; expiry ⇒ treat as dead link → force close → `backoff`. This is what actually detects half-open TCP after AP roaming.
 7. `backoff` → `Duration = clamp(kBackoffInitial × kBackoffMultiplier^(attempt−1), ≤ kBackoffMax)` ± `kJitterRatio` jitter → timer → `attempt++` → `connecting`.
 
 ```dart
@@ -133,7 +133,7 @@ static Duration computeBackoff(int attempt, double jitter01) {
 | command acks | every `CMD_*` gets exactly one `<ACTION>_RESULT` / `<ACTION>_ERROR` echoing `id` (03 §5.7) — consumers (Docs 36–45) await them; Doc 31 only streams them |
 | frames > 65536 B | server closes **4400** PROTOCOL_ERROR → client treats as fatal-for-session → `backoff` |
 
-**Exact constants:** `kWsDefaultPort = 50506` (= codec `wsPort`); `kMdnsServiceType = '_potpilot._tcp.local.'`; `kBackoffInitial = 500 ms`; `kBackoffMultiplier = 2.0`; `kBackoffMax = 15 s`; `kJitterRatio = 0.20`; `kPingInterval = 15 s` (03 §4.2 client ping; server idle-closes after 30 s with `4408`); `kLivenessTimeout = 5 s` (2.5× the server's ≤2 s telemetry keepalive, 03 §4.3); `kConnectTimeout = 5 s`; `kMdnsFallbackAfter = 3`; `kSendQueueCapacity = 32`. Close codes per 03: `4400` PROTOCOL_ERROR · `4401` UNAUTHORIZED · `4408` HEARTBEAT_TIMEOUT.
+**Exact constants:** `kWsDefaultPort = 50506` (= codec `wsPort`); `kMdnsServiceType = '_potpilot._tcp.local.'`; `kBackoffInitial = 500 ms`; `kBackoffMultiplier = 2.0`; `kBackoffMax = 15 s`; `kJitterRatio = 0.20`; `kPingInterval = 15 s` (03 §4.2 client ping; server idle-closes after 30 s with `4408`); `kLivenessTimeout = 8 s` (covers the 5.0 s `FULL_STATE` refresh cadence with jitter margin; the pre-fix 5 s exactly equaled it and flapped, 2026-10-17); `kConnectTimeout = 5 s`; `kMdnsFallbackAfter = 3`; `kSendQueueCapacity = 32`. Close codes per 03: `4400` PROTOCOL_ERROR · `4401` UNAUTHORIZED · `4408` HEARTBEAT_TIMEOUT.
 
 **TELEMETRY_SYNC:** this doc only validates it is a decodable envelope and forwards it; payload key parsing is Doc 33's §5.
 

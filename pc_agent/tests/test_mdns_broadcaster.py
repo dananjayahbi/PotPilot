@@ -57,6 +57,12 @@ def _install_fake(monkeypatch, ips):
     FakeAsyncZeroconf.instances.clear()
     monkeypatch.setattr(mdns, "AsyncZeroconf", FakeAsyncZeroconf)
     monkeypatch.setattr(mdns, "collect_lan_ipv4", lambda: list(ips))
+    # The real primary_lan_ipv4() probes the default route; tests pin it to
+    # the first simulated fallback so the single advertised A record stays
+    # deterministic (the probe would return this machine's own NIC).
+    monkeypatch.setattr(
+        mdns, "primary_lan_ipv4", lambda fallbacks=None: next(iter(fallbacks or []), None)
+    )
     return FakeAsyncZeroconf.instances
 
 
@@ -79,7 +85,8 @@ def test_service_info_fields(monkeypatch):
             TXT_VERSION: "1",
         }
         assert info.name == "My-Test-PC._potpilot._tcp.local."
-        assert sorted(info.parsed_addresses()) == sorted(ips)
+        # Single primary A record (multi-NIC flip-flop fix, 2026-10-17):
+        assert info.parsed_addresses() == [ips[0]]
         # no secret of any kind in the advertised record
         assert set(info.decoded_properties) == {"udp", "ws", "ver"}
         assert broadcaster.is_registered
@@ -123,8 +130,9 @@ def test_refresh_detects_change(monkeypatch):
         changed = await broadcaster.refresh()
         assert changed is True
         assert len(fake.updated) == 1
-        assert sorted(fake.updated[0].parsed_addresses()) == ["10.0.0.3", "10.0.0.4"]
-        assert seen == [["10.0.0.3", "10.0.0.4"]]
+        # re-announces only the single new primary (first fallback)
+        assert fake.updated[0].parsed_addresses() == ["10.0.0.3"]
+        assert seen == [["10.0.0.3"]]
         await broadcaster.stop()
 
     asyncio.run(scenario())
@@ -160,6 +168,46 @@ def test_collect_lan_ipv4_filters(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
     result = collect_lan_ipv4()
     assert result == ["10.0.0.7", "192.168.1.50"]  # filtered, sorted, deduped
+
+
+class _ProbeSocket:
+    """Fake UDP probe socket: with-statement protocol + routable getsockname."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    def __enter__(self) -> "_ProbeSocket":
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+    def connect(self, addr) -> None:
+        del addr
+
+    def getsockname(self) -> tuple[str, int]:
+        return ("203.0.113.9", 12345)
+
+    def close(self) -> None:
+        pass
+
+
+def test_primary_lan_ipv4_prefers_default_route_probe(monkeypatch):
+    monkeypatch.setattr(mdns.socket, "socket", _ProbeSocket)
+    # The probe (default-route source IP) wins over hostname-derived fallbacks.
+    assert mdns.primary_lan_ipv4(["192.168.1.5", "10.0.0.7"]) == "203.0.113.9"
+
+
+def test_primary_lan_ipv4_falls_back_and_filters(monkeypatch):
+    def _no_route(*args, **kwargs):
+        del args, kwargs
+        raise OSError("simulated no route")
+
+    monkeypatch.setattr(mdns.socket, "socket", _no_route)
+    # Unusable entries (link-local) are skipped; first usable fallback wins.
+    assert mdns.primary_lan_ipv4(["169.254.1.2", "10.0.0.4"]) == "10.0.0.4"
+    assert mdns.primary_lan_ipv4([]) is None
+    assert mdns.primary_lan_ipv4(None) is None
 
 
 def test_init_failure_does_not_raise(monkeypatch):

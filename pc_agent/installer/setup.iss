@@ -6,15 +6,21 @@
 ; ============================================================
 
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.2.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist\PotPilotAgent"
 #endif
 #define AppExe "PotPilotAgent.exe"
+; Uninstall-key GUID.  AppGuidEscaped is the [Setup] source form (`{{` is
+; Inno's escaped literal `{`, so the stored AppId — and the uninstall key —
+; is `{GUID}`); AppGuid is the single-brace form used by maintenance_mode.iss
+; in [Code].  NEVER change the GUID — upgrades key off this ID.
+#define AppGuid "{7C3A1E52-9D4B-4C7A-B6E0-5A1F0C2D8E91}"
+#define AppGuidEscaped "{{7C3A1E52-9D4B-4C7A-B6E0-5A1F0C2D8E91}"
 
 [Setup]
-AppId={{7C3A1E52-9D4B-4C7A-B6E0-5A1F0C2D8E91}
+AppId={#AppGuidEscaped}
 AppName=PotPilot
 AppVersion={#AppVersion}
 AppPublisher=PotPilot
@@ -29,7 +35,10 @@ OutputBaseFilename=PotPilot_Setup
 Compression=lzma2/max
 SolidCompression=yes
 CloseApplications=yes
-AppMutex=PotPilotAgent
+; Must match _INSTANCE_MUTEX_NAME (main.py) so Inno's close-applications
+; detection sees a running agent; the ssInstall taskkill below is the
+; deterministic guarantee for in-place upgrades/repairs.
+AppMutex=PotPilotAgentSingleInstance
 UninstallDisplayIcon={app}\{#AppExe}
 WizardStyle=modern
 ; Shared tray/GUI icon (Doc 27/28 assume it); fall back to the default
@@ -59,13 +68,19 @@ Name: "{autodesktop}\PotPilot"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "PotPilot"; ValueData: """{app}\{#AppExe}"""; Flags: uninsdeletevalue; Tasks: startup
 
 [Run]
-Filename: "{app}\{#AppExe}"; Description: "Launch PotPilot"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+; Relaunched after fresh installs, upgrades AND silent runs (the ssInstall
+; taskkill stopped the agent; /SILENT upgrades must bring it back up).
+Filename: "{app}\{#AppExe}"; Description: "Launch PotPilot"; WorkingDir: "{app}"; Flags: nowait postinstall
 
 [UninstallRun]
 ; End the agent (tray daemon) before files/rules are removed.
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM {#AppExe} /F"; Flags: runhidden waituntilterminated
 
 [Code]
+{ Repair/upgrade mode page, /REPAIR flag, previous-install detection and the
+  pre-copy agent kill (declared first - later functions call KillAgent). }
+#include "maintenance_mode.iss"
+
 const
   FW_RULE_UDP = 'PotPilot Agent - UDP Input (50505)';
   FW_RULE_TCP = 'PotPilot Agent - TCP Input (50506)';
@@ -108,6 +123,12 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   UdpOk, TcpOk: Boolean;
 begin
+  if CurStep = ssInstall then
+  begin
+    { In-place upgrade/repair: close a live agent so [Files] can overwrite
+      the locked executable (no-op on fresh installs). }
+    KillAgent();
+  end;
   if CurStep = ssPostInstall then
   begin
     UdpOk := AddFirewallRule(FW_RULE_UDP, 'UDP', '50505');

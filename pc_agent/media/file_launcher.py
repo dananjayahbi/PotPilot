@@ -10,15 +10,21 @@ playback via telemetry).
 
 Pipeline (§4): validate the path against Doc 20's extension set → resolve the
 player exe (config ``potplayer_exe_path`` else ``DEFAULT_PLAYER_PATH``) → spawn
-``[exe, path, /fullscreen]`` with ``subprocess.Popen`` in a worker thread and
-wait out the single-instance hand-off for at most ``HANDOFF_GRACE_S`` (a
-cold-started primary player outlives the grace window and is reaped by a
-background thread — it is never killed) → poll Doc 08's locator
-every ``HWND_POLL_INTERVAL_S`` until ``HWND_WAIT_TIMEOUT_S`` → Doc 11
+``[exe, path, /current, /fullscreen]`` with ``subprocess.Popen`` in a worker
+thread and wait out the single-instance hand-off for at most
+``HANDOFF_GRACE_S`` (a cold-started primary player outlives the grace window
+and is reaped by a background thread — it is never killed) → poll Doc 08's
+locator every ``HWND_POLL_INTERVAL_S`` until ``HWND_WAIT_TIMEOUT_S`` → Doc 11
 ``snap_to_primary()`` in a worker thread.  Every failure is a
 :class:`FileLaunchError` with a frozen ``E_*`` code; HWND timeout and snap
 failures degrade softly (launch still succeeds, ``snapped:false`` logged).
 Concurrent launches serialize on a module-level ``asyncio.Lock``.
+
+``/current`` (CmdLine.txt) forces the file into the *existing* PotPlayer
+instance regardless of the "Multiple instances" preference — without it a
+warm spawn opens a second window that churns and closes itself 10–20 s
+later (live-verified 2026-10-17), which read to users as "opens then
+closes".  With no instance running it behaves like a normal cold start.
 """
 
 from __future__ import annotations
@@ -48,6 +54,11 @@ log = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 ACT_LAUNCH_MEDIA: str = "LAUNCH_MEDIA"
 FULLSCREEN_SWITCH: str = "/fullscreen"
+# PotPlayer CmdLine.txt: route the file into the already-running instance
+# (bypasses the "Multiple instances" preference; cold start falls back to a
+# normal launch).  Prevents the duplicate-window open/close churn on warm
+# launches that live testing reproduced on 2026-10-17.
+CURRENT_SWITCH: str = "/current"
 HWND_WAIT_TIMEOUT_S: float = 5.0
 HWND_POLL_INTERVAL_S: float = 0.1
 DEFAULT_PLAYER_PATH: str = r"C:\Program Files\DAUM\PotPlayer\PotPlayer64.exe"
@@ -223,7 +234,7 @@ class FileLauncher:
         normalized = self._validate_path(path)
         exe = self.resolve_player_exe()
         async with _launch_lock:
-            argv = [exe, normalized, FULLSCREEN_SWITCH]
+            argv = [exe, normalized, CURRENT_SWITCH, FULLSCREEN_SWITCH]
             try:
                 await asyncio.to_thread(_spawn_player, argv)
             except FileLaunchError:

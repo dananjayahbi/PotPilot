@@ -44,9 +44,11 @@ const double kJitterRatio = 0.20;
 /// Client WS-level ping interval (03 §4.2; server idle-closes after 30 s).
 const Duration kPingInterval = Duration(seconds: 15);
 
-/// Max silence from the PC before the link is declared half-open (03 §4.3
-/// promises inbound frames every <=250 ms; 5 s = 20 missed ticks).
-const Duration kLivenessTimeout = Duration(seconds: 5);
+/// Max silence from the PC before the link is declared half-open.  The
+/// server's FULL_STATE refresh cycle is exactly 5.0 s (20 ticks x 250 ms;
+/// empty diffs are skipped), so a 5 s watchdog raced it and reconnected on
+/// a healthy idle link — 8 s gives the cadence real margin (Doc 31).
+const Duration kLivenessTimeout = Duration(seconds: 8);
 
 /// Per-attempt WebSocket upgrade timeout.
 const Duration kConnectTimeout = Duration(seconds: 5);
@@ -523,20 +525,14 @@ class WsClient {
       return;
     }
     if (_pairedServiceName != null && info.serviceName == _pairedServiceName) {
-      _controlledReconnect(info.ipv4);
+      // Multi-A-record DHCP churn (extra NICs) flips this value constantly.
+      // The live session already works — tearing it down per flip caused the
+      // connect/disconnect storm (2026-10-17).  Adopt the newest IP silently
+      // so the *next* reconnect (after the current TCP really dies) targets
+      // it; the mDNS fallback covers the miss if this IP turns out dead.
+      _host = info.ipv4;
+      unawaited(_persistIp(info.ipv4));
     }
-  }
-
-  /// Immediate session restart against a changed IP for the paired host.
-  void _controlledReconnect(String newIp) {
-    _session++;
-    _teardownChannel();
-    _cancelBackoffTimer();
-    _host = newIp;
-    _attempt = 0;
-    _pairedServiceName = null;
-    unawaited(_persistIp(newIp));
-    unawaited(_beginConnect());
   }
 
   // ---------------------------------------------------------------------------
