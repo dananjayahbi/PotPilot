@@ -23,7 +23,7 @@ Delivers a **standalone tactile feedback service** (`HapticEngine`) that exposes
 **Reads/touches owned by other docs:**
 - `mobile_app/pubspec.yaml` (Doc [05_flutter_app_boilerplate_deps.md](05_flutter_app_boilerplate_deps.md)) — consumes the already-declared `vibration` dependency; this doc does **not** edit it.
 - `mobile_app/android/.../AndroidManifest.xml` (scaffolded by Doc 05) — requires `android.permission.VIBRATE`; flagged as an integration note only.
-- Call sites (written by their owners, never edited by this doc): `features/trackpad/virtual_trackpad.dart` (35), `features/deck/potplayer_deck.dart` (36), `features/bed_mode/blind_gesture_pad.dart` (41), `hardware_hooks/volume_button_hijack.dart` (43).
+- Call sites (written by their owners, never edited by this doc): `features/trackpad/virtual_trackpad.dart` (35), `features/deck/potplayer_deck.dart` (36), `features/bed_mode/blind_gesture_pad.dart` (41 — **removed in round 6, 2026-10-18**, file deleted with bed mode), `hardware_hooks/volume_button_hijack.dart` (43).
 
 ## 3. Public Contract
 
@@ -107,6 +107,8 @@ The engine **emits zero wire traffic** (no WS envelope, no UDP datagram) — Doc
 | 41 Bed mode | minute tick crossed during hold-scrub | (position from `TELEMETRY_SYNC`) | `minuteTick` |
 | 41 Bed mode | single tap Play/Pause | WS `PLAY_PAUSE` | `heavyThud` |
 | 41 Bed mode | two-finger volume slide step | WS volume action (Doc 43 registry) | `volumeTick` |
+
+**Round-6 note (2026-10-18):** all `41 Bed mode` rows above (and Doc 41's half of the `35/41` scrub row) are historical — bed mode was removed in round 6 (`features/bed_mode/blind_gesture_pad.dart` deleted); no such call sites remain.
 
 **Scrub-pulse lifecycle rule:** the pulse must start/stop in the *same* code path that starts/stops the `0x04` scrub packet stream, so tactile rhythm and wire cadence cannot drift apart.
 

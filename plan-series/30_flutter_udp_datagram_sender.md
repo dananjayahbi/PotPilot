@@ -155,7 +155,7 @@ sequenceDiagram
 - [15_pc_token_auth_middleware.md](15_pc_token_auth_middleware.md) — peer: must compute the identical XOR auth byte.
 - [34_flutter_local_storage_connection_cache.md](34_flutter_local_storage_connection_cache.md) — supplies host/port/token at `configure()`.
 - [35_flutter_120hz_virtual_trackpad.md](35_flutter_120hz_virtual_trackpad.md) — sole production caller of `sendMove/sendScroll/sendButton`.
-- [31_flutter_websocket_client_reconnect.md](31_flutter_websocket_client_reconnect.md) — parallel transport; `configure()` timing is driven by pairing (Doc 32).
+- [31_flutter_websocket_client_reconnect.md](31_flutter_websocket_client_reconnect.md) — parallel transport; `configure()` timing is driven by pairing (Doc 32). **(Plus the round-6 `UdpRebindWatcher` on every WS `connected` transition — see the §7 correction, 2026-10-18.)**
 
 **External packages:** none beyond `dart:io`. `shared_preferences` (catalog of [05_flutter_app_boilerplate_deps.md](05_flutter_app_boilerplate_deps.md)) is used only indirectly via Doc 34.
 
@@ -164,7 +164,7 @@ sequenceDiagram
 - **Sequence wrap at 65535:** explicit `_seq = (_seq + 1) & 0xFFFF`; receiver accepts wrap-around ordering (see 02); no reset mid-session.
 - **`configure()` never called / host invalid:** every `send*` silently drops and increments `_dropped`; no throw from gesture code.
 - **Token malformed (≠32 hex chars):** `configure()` throws `ArgumentError` synchronously — pairing layer (Doc 32) validates before persisting.
-- **Wi-Fi drop mid-session:** `send()` raises `SocketException` → error swallowed, counted; after 32 consecutive errors `isReady=false`; next successful `configure()` (triggered by reconnect flow) rebinds. No packet retries ever.
+- **Wi-Fi drop mid-session:** `send()` raises `SocketException` → error swallowed, counted; after 32 consecutive errors `isReady=false`; next successful `configure()` (triggered by reconnect flow) rebinds. No packet retries ever. **(Correction — round 6, 2026-10-18: no "reconnect flow" re-`configure()` existed when this was written; the SessionGate now subscribes to `WsClient.instance.stateChanges` and re-runs the idempotent `UdpSender.configure()` on every WS `connected` transition via `UdpRebindWatcher` (`mobile_app/lib/network/udp_rebind.dart`), serialized through a future tail — that is the actual rebind path, and it fixes live-scrub previews dying permanently after any blip.)**
 - **int16 overflow of accumulated deltas:** accumulator flushed before adding when `|acc + d| > 32767`, so a flick is split into consecutive packets rather than wrapped/truncated.
 - **Pointer events faster than 120 Hz (240 Hz touch panels):** coalescing guarantees ≤120 move packets/s while summing all deltas — no input is lost, only batched.
 - **Buffer reuse race:** `RawDatagramSocket.send` copies synchronously; verified by test asserting two back-to-back sends with different payloads arrive intact. If a future SDK changes this, tests fail loudly.

@@ -18,17 +18,22 @@ abstract final class CacheKeys {
   /// One of [kStartupTabIds].
   static const String startupTab = 'pp.startup_tab';
 
+  /// Screen brightness 0.05–1.0 applied to the controller app window
+  /// (round-6 display setting; double as string).
+  static const String brightness = 'pp.display.brightness';
+
   /// Every key owned by this doc; used by [ConnectionCache.clearAll].
   static const List<String> all = <String>[
     hostsV1,
     activeHostId,
     trackpadProfileV1,
     startupTab,
+    brightness,
   ];
 }
 
 /// Startup tab ids owned by the Doc 05 navigation shell.
-const List<String> kStartupTabIds = <String>['deck', 'trackpad', 'bed', 'library'];
+const List<String> kStartupTabIds = <String>['deck', 'trackpad', 'library'];
 
 /// Defensive cap: only the most-recently-connected hosts are retained.
 const int kMaxHosts = 5;
@@ -307,6 +312,7 @@ class ConnectionCache {
   String _activeHostId = '';
   TrackpadProfile _trackpadProfile = TrackpadProfile.defaults;
   String _startupTab = 'deck';
+  double _brightness = 1.0;
 
   bool get isReady => _ready;
 
@@ -341,6 +347,7 @@ class ConnectionCache {
     }
     _trackpadProfile = _loadProfile(prefs);
     _startupTab = _loadStartupTab(prefs);
+    _brightness = _loadBrightness(prefs);
     _ready = true;
   }
 
@@ -397,6 +404,20 @@ class ConnectionCache {
   String _loadStartupTab(SharedPreferences prefs) {
     final String raw = prefs.getString(CacheKeys.startupTab) ?? 'deck';
     return kStartupTabIds.contains(raw) ? raw : 'deck';
+  }
+
+  /// Corrupt / out-of-range values fall back to the current system default
+  /// (1.0 — the settings screen clamps to `kBrightnessMin`..1.0 anyway).
+  double _loadBrightness(SharedPreferences prefs) {
+    final String? raw = prefs.getString(CacheKeys.brightness);
+    if (raw == null) {
+      return 1.0;
+    }
+    final double? parsed = double.tryParse(raw);
+    if (parsed == null || parsed.isNaN || parsed < 0.05 || parsed > 1.0) {
+      return 1.0;
+    }
+    return parsed;
   }
 
   static List<PcHostRecord> _sortedDesc(List<PcHostRecord> hosts) {
@@ -576,6 +597,30 @@ class ConnectionCache {
         .then<void>((bool ok) => _requirePersisted(ok, CacheKeys.startupTab));
   }
 
+  // -- display ---------------------------------------------------------------
+
+  /// Controller-screen brightness in 0.05–1.0 (round-6 DISPLAY setting);
+  /// 1.0 until the user changes it.
+  double get brightness {
+    _ensureReady();
+    return _brightness;
+  }
+
+  Future<void> saveBrightness(double value) {
+    _ensureReady();
+    if (value.isNaN || value < 0.05 || value > 1.0) {
+      throw ArgumentError.value(
+        value,
+        'value',
+        'brightness must be within 0.05..1.0',
+      );
+    }
+    _brightness = value;
+    return _prefs!
+        .setString(CacheKeys.brightness, value.toStringAsFixed(3))
+        .then<void>((bool ok) => _requirePersisted(ok, CacheKeys.brightness));
+  }
+
   /// Wipes the `pp.*` namespace (un-pair everything); unrelated app prefs
   /// are never touched.
   Future<void> clearAll() {
@@ -585,6 +630,7 @@ class ConnectionCache {
     _activeHostId = '';
     _trackpadProfile = TrackpadProfile.defaults;
     _startupTab = 'deck';
+    _brightness = 1.0;
     final Iterable<String> ppKeys =
         prefs.getKeys().where((String k) => k.startsWith('pp.'));
     return Future.wait(<Future<Object?>>[

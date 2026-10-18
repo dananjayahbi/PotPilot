@@ -28,7 +28,7 @@
 |---|---|---|
 | `mobile_app/lib/network/ws_client.dart` | Doc 31 | Subscribes to `envelopes` (filters `TELEMETRY_SYNC`) and `stateChanges` |
 | `shared_specs/ws_command_schema.json` | Doc 01/03 | TELEMETRY_SYNC frame contract consumed by tests |
-| Consumer widgets (deck 36, HUD 38, bed mode 41, volume hijack 43) | other docs | Read `telemetryProvider` only — no writes |
+| Consumer widgets (deck 36, HUD 38, ~~bed mode 41~~ *(removed round 6, 2026-10-18)*, volume hijack 43) | other docs | Read `telemetryProvider` only — no writes |
 
 No other file may construct `TelemetryState` or call `handleEnvelope`.
 
@@ -94,7 +94,7 @@ flowchart LR
   N --> P["telemetryProvider"]
   P --> U1["ScrubBar / HUD (38)"]
   P --> U2["Deck (36)"]
-  P --> U3["Blind Bed Mode (41)"]
+  P --> U3["Blind Bed Mode (41) — removed in round 6, 2026-10-18"]
   P --> U4["Volume hijack (43)"]
 ```
 

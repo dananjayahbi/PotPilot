@@ -10,7 +10,7 @@
 - Gesture state machine with explicit timings, tuned from `TrackpadProfile` (Doc 34) — sensitivity, acceleration gain/threshold, scroll multiplier.
 
 **Out of scope**
-- Bed-mode eyes-free gestures ([41_flutter_blind_bed_mode_gestures.md](41_flutter_blind_bed_mode_gestures.md)) — different canvas, different semantics.
+- Bed-mode eyes-free gestures ([41_flutter_blind_bed_mode_gestures.md](41_flutter_blind_bed_mode_gestures.md)) — different canvas, different semantics. **(Doc 41 removed in round 6, 2026-10-18.)**
 - Scrubbing HUD/timeline ([38_flutter_live_scrub_bar_speed_hud.md](38_flutter_live_scrub_speed_hud.md)); middle-click/keyboard ([37_flutter_full_pc_keyboard_sheet.md](37_flutter_full_pc_keyboard_sheet.md)).
 - OS cursor rendering and the PC-side wheel/click injection ([06_win32_sendinput_mouse_engine.md](06_win32_sendinput_mouse_engine.md)) — this widget only emits wire packets.
 - Packet packing, rate limiting, sequencing ([30_flutter_udp_datagram_sender.md](30_flutter_udp_datagram_sender.md) — consumed as a black box), and haptic pattern design (Doc 42).

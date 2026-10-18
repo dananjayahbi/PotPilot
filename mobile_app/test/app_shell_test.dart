@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:potpilot_remote/core/haptics/haptic_engine.dart';
 import 'package:potpilot_remote/core/theme/oled_theme.dart';
-import 'package:potpilot_remote/features/bed_mode/blind_gesture_pad.dart';
 import 'package:potpilot_remote/features/trackpad/virtual_trackpad.dart';
 import 'package:potpilot_remote/main.dart';
 import 'package:potpilot_remote/network/telemetry_provider.dart';
@@ -33,7 +32,7 @@ class _FakeSocket implements TelemetrySocket {
   }
 }
 
-/// Shell suite (Doc 05 section 9): 4 destinations in order, IndexedStack
+/// Shell suite (Doc 05 section 9): 3 destinations in order, IndexedStack
 /// child switching with per-tab element retention, AppTab index alignment,
 /// PopScope back-press behavior, and the setTab programmatic bridge.
 ///
@@ -75,21 +74,20 @@ void main() {
       );
 
   test('AppTab indices match NavigationBar destination order', () {
-    expect(AppTab.values.length, 4);
+    expect(AppTab.values.length, 3);
     expect(AppTab.deck.index, 0);
     expect(AppTab.trackpad.index, 1);
-    expect(AppTab.bedMode.index, 2);
-    expect(AppTab.library.index, 3);
+    expect(AppTab.library.index, 2);
   });
 
   testWidgets(
-    'renders four NavigationBar destinations in canonical order',
+    'renders three NavigationBar destinations in canonical order',
     (WidgetTester tester) async {
       await pumpApp(tester);
 
       expect(find.byType(NavigationBar), findsOneWidget);
       expect(find.byType(IndexedStack), findsOneWidget);
-      expect(stackOf(tester).children.length, 4);
+      expect(stackOf(tester).children.length, 3);
       expect(stackOf(tester).index, AppTab.deck.index);
 
       final List<String> labels = tester
@@ -101,7 +99,7 @@ void main() {
           )
           .map((Text widget) => widget.data ?? '')
           .toList();
-      expect(labels, <String>['Deck', 'Trackpad', 'Bed Mode', 'Library']);
+      expect(labels, <String>['Deck', 'Trackpad', 'Library']);
     },
   );
 
@@ -165,51 +163,27 @@ void main() {
       await tester.pumpAndSettle();
       expect(stackOf(tester).index, AppTab.deck.index);
       expect(popScopeOf(tester).canPop, isTrue);
-
-      // Bed Mode (bar hidden) also pops back to deck first.
-      AppShell.of(tester.element(find.byType(IndexedStack)))
-          .setTab(AppTab.bedMode);
-      await tester.pumpAndSettle();
-      expect(find.byType(NavigationBar), findsNothing);
-      expect(popScopeOf(tester).canPop, isFalse);
-
-      popScopeOf(tester).onPopInvokedWithResult?.call(false, null);
-      await tester.pumpAndSettle();
-      expect(stackOf(tester).index, AppTab.deck.index);
-      expect(find.byType(NavigationBar), findsOneWidget);
     },
   );
 
   testWidgets(
-    'AppShell.of(context).setTab switches tabs and hides the bar '
-    'in Bed Mode',
+    'AppShell.of(context).setTab switches tabs programmatically',
     (WidgetTester tester) async {
       await pumpApp(tester);
 
       final BuildContext navContext =
           tester.element(find.byType(NavigationBar));
-      AppShell.of(navContext).setTab(AppTab.bedMode);
+      AppShell.of(navContext).setTab(AppTab.library);
       await tester.pumpAndSettle();
 
-      // Bed Mode is a full-screen canvas: NavigationBar hidden.
-      expect(find.byType(NavigationBar), findsNothing);
-      expect(stackOf(tester).index, AppTab.bedMode.index);
-      expect(
-        find.descendant(
-          of: find.byType(IndexedStack),
-          matching: find.byType(BlindGesturePad, skipOffstage: false),
-          skipOffstage: false,
-        ),
-        findsOneWidget,
-      );
+      expect(stackOf(tester).index, AppTab.library.index);
+      expect(find.byType(NavigationBar), findsOneWidget);
 
-      // Only setTab can leave Bed Mode (no bar to tap).
       final BuildContext stackContext =
           tester.element(find.byType(IndexedStack));
       AppShell.of(stackContext).setTab(AppTab.deck);
       await tester.pumpAndSettle();
 
-      expect(find.byType(NavigationBar), findsOneWidget);
       expect(stackOf(tester).index, AppTab.deck.index);
     },
   );

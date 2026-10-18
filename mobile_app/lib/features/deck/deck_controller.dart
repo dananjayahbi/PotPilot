@@ -120,7 +120,7 @@ class PotPlayerDeckController extends ChangeNotifier {
   /// clamped integer percent (Doc 03 §5.3; bed-mode §4.5 dedupe — the last
   /// committed value never re-sends). WS-down / PotPlayer-closed are
   /// silent rejects (§7); stale telemetry does NOT gate volume (the mixer
-  /// base comes from the cached frame, Doc 41 §5).
+  /// base comes from the cached frame).
   Future<void> setVolume(int percent, TelemetryState state) async {
     final int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
     if (!isConnected) {

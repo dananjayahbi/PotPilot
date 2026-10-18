@@ -15,7 +15,7 @@
    * Uses `pywin32` (`FindWindow("PotPlayer64", None)` + `SendMessage`) to dispatch `WM_COMMAND` and `WM_USER` messages directly to PotPlayer's engine, even when PotPlayer is unfocused or behind another window.
 3. **Bedroom-First Mobile UX (Flutter):**
    * Pure `#000000` AMOLED pitch-black interface to preserve night vision.
-   * Full-screen "Blind Bed Mode" gesture canvas with distinct haptic feedback ticks, hardware volume button hijacking, and automatic movie pausing on incoming phone/WhatsApp calls.
+   * Full-screen "Blind Bed Mode" gesture canvas with distinct haptic feedback ticks, hardware volume button hijacking, and automatic movie pausing on incoming phone/WhatsApp calls. **(Bed Mode gesture canvas removed in round 6, 2026-10-18 — replaced by the trackpad keyboard trigger zone; haptics, volume hijack and call auto-pause remain.)**
 
 ---
 
@@ -99,7 +99,7 @@ potpilot/
         │   ├── hud/scrub_speed_hud.dart       # Doc 38
         │   ├── tracks/audio_sub_modal.dart    # Doc 39
         │   ├── display/monitor_power_sheet.dart # Doc 40
-        │   ├── bed_mode/blind_gesture_pad.dart  # Doc 41
+        │   ├── bed_mode/blind_gesture_pad.dart  # Doc 41 (removed in round 6, 2026-10-18)
         │   └── library/movie_browser.dart     # Doc 45
         └── hardware_hooks/
             ├── volume_button_hijack.dart      # Doc 43
@@ -195,7 +195,7 @@ Your specialized Doc-Generator Agents will generate the following 46 files insid
 40. `40_flutter_multi_monitor_power_sheet.md` — Builds the quick-control drawer for "Snap PotPlayer to Main Screen", "Blackout Other Monitors", DDC/CI Monitor Brightness slider, and the "Fall Asleep" Shutdown Timer.
 
 ### Category H: Flutter App — Bedroom Ergonomics & Hardware Hooks
-41. `41_flutter_blind_bed_mode_gestures.md` — Implements the eyes-free full-screen gesture canvas: single tap (Play/Pause), horizontal swipe/hold (scrubbing with minute ticks), two-finger vertical slide (Volume), and right-edge slide (Monitor DDC/CI Brightness).
+41. `41_flutter_blind_bed_mode_gestures.md` — Implements the eyes-free full-screen gesture canvas: single tap (Play/Pause), horizontal swipe/hold (scrubbing with minute ticks), two-finger vertical slide (Volume), and right-edge slide (Monitor DDC/CI Brightness). **(Doc 41 removed in round 6, 2026-10-18 — feature cut from the app; doc retained for history.)**
 42. `42_flutter_haptic_feedback_engine.md` — Creates differentiated tactile feedback patterns (sharp micro-tick for 5s seek, heavy thud for Play/Pause, rhythmic pulse during continuous scrubbing, double-tick on 1.0x speed reset).
 43. `43_flutter_hardware_volume_button_hijack.md` — Intercepts physical Android hardware Volume Up/Down key events while the app is foregrounded to adjust PC/PotPlayer volume (or seek on long-press) without looking at the screen.
 44. `44_flutter_incoming_call_autopause_hook.md` — Listens to Android `PhoneState` events (`RINGING`, `OFFHOOK`, `IDLE`) and automatically dispatches a `PAUSE` command to PotPlayer when a call arrives, optionally resuming on hangup.
@@ -260,7 +260,7 @@ Before coding begins, your **Doc-Generator Agents** create the 46 micro-document
 #### Wave 3.A — Wiring, Packaging & QA (4 Subagents in Parallel)
 * **Subagent 1 (PC Master Wiring & PyInstaller):** Wires `pc_agent/main.py` connecting all routers/daemons and executes `27_pc_pyinstaller_build_spec.md`.
 * **Subagent 2 (InnoSetup Installer):** Executes `28_pc_innosetup_installer_script.md` and compiles the installer via `ISCC.exe` (InnoSetup Command-Line Compiler).
-* **Subagent 3 (Flutter Master Shell & APK Build):** Wires `mobile_app/lib/main.dart` navigation tabs (PotPlayer Deck, Blind Bed Mode, Trackpad, Movie Library) and runs `flutter analyze` + `flutter build apk --release`.
+* **Subagent 3 (Flutter Master Shell & APK Build):** Wires `mobile_app/lib/main.dart` navigation tabs (PotPlayer Deck, Blind Bed Mode, Trackpad, Movie Library) and runs `flutter analyze` + `flutter build apk --release`. **(4-tab list is pre-round-6; the shell now wires 3 tabs — Deck, Trackpad, Library — since round 6, 2026-10-18.)**
 * **Subagent 4 (E2E Verification Suite):** Executes `46_e2e_latency_benchmark_and_qa_suite.md`.
 
 ---

@@ -53,7 +53,12 @@ export 'volume_popup.dart';
 /// top inside a scroll view. 560 covers the worst-case content (reconnect
 /// strip + closed caption + full control cluster ≈ 540) with margin, so
 /// an anchored Column can never overflow (small phones scroll instead).
-const double kDeckAnchoredMinHeight = 560;
+// Minimum height for the bottom-anchored deck layout. Below this the deck
+// stacks from the top in a scroll view. Round 6 restored the top general
+// seek bar (ScrubTrack): measured natural content heights are 631 (normal)
+// .. 666 (reconnecting + closed, worst case), so anchoring only engages
+// above 700 — anything lower would overflow instead of scrolling.
+const double kDeckAnchoredMinHeight = 700;
 
 /// Root deck widget: consumes Doc 33 telemetry, hosts the Doc 38 HUD
 /// header plus the transport/selector/volume cluster and the secondary

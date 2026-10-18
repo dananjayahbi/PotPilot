@@ -2,7 +2,7 @@
 //
 // Cold app start -> seed + pair from the cached host (Doc 34, no camera) ->
 // first TELEMETRY_SYNC frame within 2 s -> all root tabs (Deck / Trackpad /
-// Bed Mode / Library) render. Requires a reachable PC agent:
+// Library) render. Requires a reachable PC agent:
 //
 //   flutter test integration_test/wiring_smoke_test.dart -d <device> \
 //     --dart-define=PC_HOST=<lan-ip> --dart-define=PC_TOKEN=<32-hex>
@@ -45,7 +45,6 @@ void main() {
       for (final String label in const <String>[
         'Deck',
         'Trackpad',
-        'Bed Mode',
         'Library',
       ]) {
         expect(

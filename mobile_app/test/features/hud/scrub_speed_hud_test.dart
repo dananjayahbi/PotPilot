@@ -128,8 +128,8 @@ void main() {
             body: Column(
               children: <Widget>[
                 ScrubSpeedHud(onScrubActiveChanged: activeLog.add),
-                // The deck ruler is the prod gesture surface these drag
-                // tests drive (the old top track was replaced by it).
+                // The bottom ruler rides along in the harness exactly as
+                // the deck composes them (shared controller).
                 const RulerSeekSlider(enabled: true),
               ],
             ),
@@ -144,7 +144,7 @@ void main() {
       tester.widget<Text>(find.byKey(const Key('hud_time_left'))).data ?? '';
 
   testWidgets(
-    'drag across the ruler streams UDP, freezes labels, commits SEEK, settles',
+    'drag across the track streams UDP, freezes labels, commits SEEK, settles',
     (WidgetTester tester) async {
       push(positionMs: 5050000, durationMs: 8100000); // 01:24:10 / 02:15:00
       await pumpHud(tester);
@@ -157,7 +157,7 @@ void main() {
 
       // Drag leftward across the track (past touch slop, no right-edge clamp).
       final TestGesture gesture = await tester.startGesture(
-        tester.getCenter(find.byKey(const Key('ruler_track'))),
+        tester.getCenter(find.byKey(const Key('hud_track'))),
       );
       await gesture.moveBy(const Offset(-60, 0));
       await tester.pump();
@@ -239,7 +239,7 @@ void main() {
     expect(find.text('00:00:00'), findsOneWidget);
 
     final TestGesture gesture = await tester.startGesture(
-      tester.getCenter(find.byKey(const Key('ruler_track'))),
+      tester.getCenter(find.byKey(const Key('hud_track'))),
     );
     await gesture.moveBy(const Offset(120, 0));
     await tester.pump();

@@ -10,7 +10,7 @@
 **Out of scope**
 - Software dimming / gamma overlays (no such feature in PotPilot; hardware luminance only).
 - Enumerating Win32 displays or moving windows — Docs 11/12 own `EnumDisplayMonitors` and blackout overlays.
-- The Flutter slider UI itself — [40_flutter_multi_monitor_power_sheet.md](40_flutter_multi_monitor_power_sheet.md) and [41_flutter_blind_bed_mode_gestures.md](41_flutter_blind_bed_mode_gestures.md) own it.
+- The Flutter slider UI itself — [40_flutter_multi_monitor_power_sheet.md](40_flutter_multi_monitor_power_sheet.md) and [41_flutter_blind_bed_mode_gestures.md](41_flutter_blind_bed_mode_gestures.md) own it. *(Doc 41 removed in round 6, 2026-10-18 — Doc 40 is the only remaining owner.)*
 - Persisting a preferred brightness — no config key; current hardware value is the source of truth.
 
 ## 2. File Ownership
@@ -111,7 +111,7 @@ Error response payload: `{"ok": false, "error": "E_DDCI_UNSUPPORTED" | "E_MONITO
 - [14_pc_websocket_server_router.md](14_pc_websocket_server_router.md) — action dispatch + response routing.
 - [18_pc_telemetry_broadcast_loop.md](18_pc_telemetry_broadcast_loop.md) — registers `snapshot()` as source `"brightness"`.
 - [10_potplayer_wm_user_telemetry_poller.md](10_potplayer_wm_user_telemetry_poller.md) — cross-reference only (telemetry cadence/pipeline shared via Doc 18).
-- [40_flutter_multi_monitor_power_sheet.md](40_flutter_multi_monitor_power_sheet.md), [41_flutter_blind_bed_mode_gestures.md](41_flutter_blind_bed_mode_gestures.md) — command senders.
+- [40_flutter_multi_monitor_power_sheet.md](40_flutter_multi_monitor_power_sheet.md), [41_flutter_blind_bed_mode_gestures.md](41_flutter_blind_bed_mode_gestures.md) — command senders. *(Doc 41 removed in round 6, 2026-10-18.)*
 - [11_multi_monitor_window_snapper.md](11_multi_monitor_window_snapper.md) — sibling module (same directory, independent file; no code coupling).
 
 **External**

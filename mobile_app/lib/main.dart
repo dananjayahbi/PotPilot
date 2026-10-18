@@ -8,14 +8,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'core/haptics/haptic_engine.dart';
 import 'core/storage/connection_cache.dart';
 import 'core/theme/oled_theme.dart';
-import 'features/bed_mode/blind_gesture_pad.dart';
 import 'features/deck/potplayer_deck.dart';
 import 'features/library/movie_browser.dart';
+import 'features/settings/display_settings_card.dart' show applyBrightness;
+import 'features/trackpad/keyboard_trigger_overlay.dart';
 import 'features/trackpad/virtual_trackpad.dart';
 import 'hardware_hooks/call_autopause_hook.dart';
 import 'hardware_hooks/volume_button_hijack.dart';
 import 'network/pairing_scanner.dart';
+import 'network/udp_rebind.dart';
 import 'network/udp_sender.dart';
+import 'network/ws_client.dart';
 
 /// Entry point: system chrome, then the Doc 34 bootstrap - the connection
 /// cache (and Doc 42's prefs instance) is awaited before the first frame so
@@ -36,6 +39,10 @@ Future<void> main() async {
   try {
     prefs = await SharedPreferences.getInstance();
     await ConnectionCache.instance.init(injected: prefs);
+    // Round-6 DISPLAY: restore the saved controller brightness before the
+    // first frame so launch never flashes the previous value (guarded —
+    // missing platform channels in tests degrade silently).
+    await applyBrightness(ConnectionCache.instance.brightness);
   } on Object catch (error) {
     debugPrint('main: storage bootstrap failed: $error');
   }
@@ -77,11 +84,10 @@ class PotPilotApp extends StatelessWidget {
 enum AppTab {
   deck,
   trackpad,
-  bedMode,
   library,
 }
 
-/// Persistent 4-tab shell; body hosted in [IndexedStack] to preserve tab
+/// Persistent 3-tab shell; body hosted in [IndexedStack] to preserve tab
 /// state so switching tabs never resets scroll/gesture state.
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
@@ -110,8 +116,7 @@ class AppShellController {
 
   final void Function(AppTab tab) _setTab;
 
-  /// Switches the shell to [tab]; the only way out of Bed Mode, whose
-  /// NavigationBar is hidden (Doc 41).
+  /// Switches the shell to [tab] (e.g. QR pairing -> Deck, Doc 32).
   void setTab(AppTab tab) => _setTab(tab);
 }
 
@@ -153,7 +158,7 @@ class _AppShellState extends State<AppShell> {
       controller: _controller,
       child: PopScope(
         // System back on non-deck tabs pops to deck first; on deck it
-        // exits the app (no accidental kill from Bed Mode).
+        // exits the app (no accidental kill mid-session).
         canPop: _index == AppTab.deck.index,
         onPopInvokedWithResult: (bool didPop, Object? result) {
           if (!didPop && mounted) {
@@ -173,20 +178,14 @@ class _AppShellState extends State<AppShell> {
       children: const <Widget>[
         _DeckPlaceholder(key: ValueKey<String>('app_shell_tab_deck')),
         _TrackpadPlaceholder(key: ValueKey<String>('app_shell_tab_trackpad')),
-        _BedModePlaceholder(key: ValueKey<String>('app_shell_tab_bed_mode')),
         _LibraryPlaceholder(key: ValueKey<String>('app_shell_tab_library')),
       ],
     );
-    if (_index == AppTab.bedMode.index) {
-      // Full-screen gesture canvas: the bar hides while Bed Mode is active.
-      return tabs;
-    }
     return Column(
       children: <Widget>[
         // Top inset only: tab content clears the status bar / notch while
         // the Scaffold keeps painting full-bleed behind it (SafeArea pads
-        // children, never the background — the OLED look stays). Bed Mode
-        // returns above this Column and keeps its immersive canvas.
+        // children, never the background — the OLED look stays).
         Expanded(
           child: SafeArea(
             top: true,
@@ -210,11 +209,6 @@ class _AppShellState extends State<AppShell> {
               label: 'Trackpad',
             ),
             NavigationDestination(
-              icon: Icon(Icons.bed_outlined),
-              selectedIcon: Icon(Icons.bed),
-              label: 'Bed Mode',
-            ),
-            NavigationDestination(
               icon: Icon(Icons.video_library_outlined),
               selectedIcon: Icon(Icons.video_library),
               label: 'Library',
@@ -228,9 +222,9 @@ class _AppShellState extends State<AppShell> {
 
 // --------------------------------------------------------------------------
 // WIRING (Session 3)
-// Session 3 (Wave 3.A) fills this region: the four placeholder classes
+// Session 3 (Wave 3.A) fills this region: the three placeholder classes
 // below mount the real tab screens (Deck -> Doc 36, Trackpad -> Doc 35,
-// Bed Mode -> Doc 41, Library -> Doc 45), and [SessionGate] routes cold
+// Library -> Doc 45), and [SessionGate] routes cold
 // start - Doc 32 pairing screen until a session pairs (fresh QR scan or
 // Doc 34 cached-record auto-connect), then the persistent [AppShell].
 // First pairing bootstraps UDP (Doc 32), the volume-button hijack
@@ -257,6 +251,8 @@ class _SessionGateState extends ConsumerState<SessionGate> {
   PairingController? _pairing;
   bool _showShell = false;
   bool _sessionWired = false;
+  UdpRebindWatcher? _udpRebind;
+  Future<void> _udpConfigTail = Future<void>.value();
 
   @override
   void initState() {
@@ -269,6 +265,16 @@ class _SessionGateState extends ConsumerState<SessionGate> {
       return;
     }
     _pairing = PairingController();
+    // Round-6 fix (Doc 30 §167): UDP used to bind once at pair time and
+    // never recover from the permanent circuit breaker / a PC IP change.
+    // Every WS (re)connect now re-runs the idempotent configure() so a
+    // blip that heals TCP also heals UDP (live scrubs, trackpad moves).
+    _udpRebind = UdpRebindWatcher(
+      states: WsClient.instance.stateChanges,
+      resolveHost: () => ConnectionCache.instance.activeHost,
+      configure: _configureUdp,
+      initialState: WsClient.instance.state,
+    )..start();
     final PcHostRecord? cached = cache.activeHost;
     if (cached != null) {
       unawaited(_autoConnect(cached));
@@ -277,6 +283,7 @@ class _SessionGateState extends ConsumerState<SessionGate> {
 
   @override
   void dispose() {
+    _udpRebind?.dispose();
     _pairing?.dispose();
     super.dispose();
   }
@@ -292,17 +299,23 @@ class _SessionGateState extends ConsumerState<SessionGate> {
   }
 
   /// Doc 32: point the UDP sender at the paired record (the persisted
-  /// host's connected IP sits first in `ipv4s`).
-  Future<void> _configureUdp(PcHostRecord host) async {
-    try {
-      await UdpSender.instance.configure(
-        host: host.ipv4s.first,
-        tokenHex: host.tokenHex,
-        port: host.udpPort,
-      );
-    } on Object catch (error) {
-      debugPrint('SessionGate: UDP configure failed: $error');
-    }
+  /// host's connected IP sits first in `ipv4s`).  Serialized through
+  /// [_udpConfigTail] so a pair-time bootstrap and a WS reconnect event
+  /// can never interleave two binds (the loser would leak a socket).
+  Future<void> _configureUdp(PcHostRecord host) {
+    final Future<void> next = _udpConfigTail.then((_) async {
+      try {
+        await UdpSender.instance.configure(
+          host: host.ipv4s.first,
+          tokenHex: host.tokenHex,
+          port: host.udpPort,
+        );
+      } on Object catch (error) {
+        debugPrint('SessionGate: UDP configure failed: $error');
+      }
+    });
+    _udpConfigTail = next;
+    return next;
   }
 
   /// Doc 44 startup: permission probe degrades to "granted" when the
@@ -367,21 +380,27 @@ class _TrackpadPlaceholder extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer(
       builder: (BuildContext context, WidgetRef ref, Widget? child) {
-        return VirtualTrackpad(
-          sender: UdpSender.instance,
-          haptics: HapticHooks.fromEngine(ref.watch(hapticEngineProvider)),
+        return Stack(
+          children: <Widget>[
+            Positioned.fill(
+              child: VirtualTrackpad(
+                sender: UdpSender.instance,
+                haptics: HapticHooks.fromEngine(
+                  ref.watch(hapticEngineProvider),
+                ),
+              ),
+            ),
+            // Round 6: phone-keyboard trigger zone (top-right; taps here
+            // never reach the trackpad below).
+            const Positioned(
+              top: 8,
+              right: 8,
+              child: KeyboardTriggerOverlay(),
+            ),
+          ],
         );
       },
     );
-  }
-}
-
-class _BedModePlaceholder extends StatelessWidget {
-  const _BedModePlaceholder({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const BlindGesturePad();
   }
 }
 

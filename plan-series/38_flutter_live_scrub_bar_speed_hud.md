@@ -5,15 +5,18 @@
 ## 1. Purpose & Scope
 **Delivers** `scrub_speed_hud.dart` — the two-way interactive movie timeline scrubber rendering `01:24:10 / 02:15:00` (current / total) plus live OSD badges for **playback speed (`1.4x`)** and **volume (`42%`)**. Telemetry drives the thumb when idle; during a drag the phone becomes the source of truth, streaming UDP `0x04` `SCRUB_SEEK` packets for low-latency preview, committing the final position with the frozen WS `SEEK {position_ms}` action (Doc 03 §5.3 — `SEEK` is this doc's scrub-bar action), then settling back onto telemetry.
 
+> **(Round 6, 2026-10-18):** `ScrubTrack` was removed in round 5 (Doc 36 §11) and is now **restored** as the top general seek bar — `features/hud/scrub_track.dart`, rendered by `ScrubSpeedHud` with key `hud_track`, alongside the Doc 36 bottom ruler (this doc's §3 contract is live again). `PotpilotScrubTransport.sendScrub` now `debugPrint`s `ScrubTransport: UDP not ready - preview packet dropped` when the UDP circuit breaker has tripped (see the Doc 30 §7 round-6 correction).
+
 **Out of scope:**
 - Discrete deck seek/speed buttons (±5s/±30s, speed step) → [36_flutter_custom_potplayer_deck_ui.md](36_flutter_custom_potplayer_deck_ui.md) (may embed this widget as a header)
-- Continuous blind-mode scrubbing gestures → [41_flutter_blind_bed_mode_gestures.md](41_flutter_blind_bed_mode_gestures.md)
+- Continuous blind-mode scrubbing gestures → [41_flutter_blind_bed_mode_gestures.md](41_flutter_blind_bed_mode_gestures.md) *(Doc 41 removed in round 6, 2026-10-18)*
 - PC-side seek execution → [09_potplayer_wm_command_dispatcher.md](09_potplayer_wm_command_dispatcher.md); telemetry production → [18_pc_telemetry_broadcast_loop.md](18_pc_telemetry_broadcast_loop.md)
 - Speed badge is **display-only** (reset lives on the deck, Doc 36)
 
 ## 2. File Ownership
 **Creates (create-only):**
 - `mobile_app/lib/features/hud/scrub_speed_hud.dart`
+- `mobile_app/lib/features/hud/scrub_track.dart` — `ScrubTrack` extracted/restored as its own file in round 6, 2026-10-18 (top general seek bar key `hud_track`)
 
 **Reads / integrates (owned by other docs):**
 - `mobile_app/lib/network/telemetry_provider.dart` — Doc 33: `TelemetryState` (`positionMs`, `durationMs`, `speed`, `volume`, `fileTitle`, `isConnected`) + staleness clock

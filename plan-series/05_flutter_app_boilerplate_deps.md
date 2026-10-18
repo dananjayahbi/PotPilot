@@ -5,8 +5,12 @@
 Scaffolds the `mobile_app/` Flutter project (Android-first bedroom remote) and its root shell:
 - `pubspec.yaml` with the frozen core dependency set (`flutter_riverpod`, `web_socket_channel`, `mobile_scanner`, `phone_state`, `vibration`, `shared_preferences`).
 - `analysis_options.yaml` implementing Doc 01's Dart lint contract.
-- `lib/main.dart` root navigation shell: AMOLED MaterialApp hook + 4-destination `NavigationBar` (`Deck`, `Trackpad`, `Bed Mode`, `Library`) over an `IndexedStack` so per-tab state survives switching. Session 3 (Wave 3.A) replaces the placeholder bodies with the real feature screens.
+- `lib/main.dart` root navigation shell: AMOLED MaterialApp hook + 4-destination `NavigationBar` (`Deck`, `Trackpad`, `Bed Mode`, `Library`) over an `IndexedStack` so per-tab state survives switching. Session 3 (Wave 3.A) replaces the placeholder bodies with the real feature screens. **(4-destination shape pre-round-6 — Bed Mode removed in round 6, 2026-10-18, now 3 destinations; see the round-6 amendment below.)**
 - Android manifest permission declarations required by later features.
+
+> **Round-6 amendment (2026-10-18):**
+> - **Bed Mode tab removed** — the shell now has **3 tabs**: `AppTab { deck, trackpad, library }` with `kStartupTabIds = ['deck','trackpad','library']` (Doc 34). Every "4-destination" / `bedMode` / `_BedModePlaceholder` statement below is the original Wave 1.A shape, **deprecated in round 6 (2026-10-18)**; the replacement feature is the trackpad keyboard trigger zone ([37_flutter_full_pc_keyboard_sheet.md](37_flutter_full_pc_keyboard_sheet.md) §11).
+> - **Dependency set** — the "frozen six" runtime deps gained a 7th in round 6: `screen_brightness: ^2.1.11` (§6.1; application-window brightness only, **no Android permission**), used by the DISPLAY settings card and re-applied at startup in `main()`.
 
 **Out of scope:** OLED theme tokens ([29_flutter_oled_theme_design_system.md](29_flutter_oled_theme_design_system.md) — this doc only reserves the `ThemeData` injection point), all networking (Docs 30–34), all feature surfaces (Docs 35–45), hardware hooks (Docs 43–44), final tab wiring and `flutter build apk` (Session 3), iOS targets (§10).
 
@@ -34,10 +38,12 @@ class PotPilotApp extends StatelessWidget
     /// Root MaterialApp: dark-only, pitch-black scaffold, delegates home to AppShell.
 
 class AppShell extends StatefulWidget
-    /// Persistent 4-tab shell; body hosted in IndexedStack to preserve tab state.
+    /// Persistent 4-tab shell (3 since round 6, 2026-10-18 — bedMode removed);
+    /// body hosted in IndexedStack to preserve tab state.
 
 enum AppTab { deck, trackpad, bedMode, library }
     /// Canonical tab order; index == NavigationBar destination index.
+    /// (Removed in round 6, 2026-10-18: now `enum AppTab { deck, trackpad, library }`.)
 
 class _AppShellState extends State<AppShell> {
   int _index;                     // selected tab, starts at AppTab.deck.index
@@ -45,9 +51,9 @@ class _AppShellState extends State<AppShell> {
 }
 ```
 Shell behavior contract:
-- Tabs in fixed order: `0 Deck (PotPlayer)` · `1 Trackpad` · `2 Bed Mode` · `3 Movie Library` (matches Session 3 wiring list in overview §6).
+- Tabs in fixed order: `0 Deck (PotPlayer)` · `1 Trackpad` · `2 Bed Mode` · `3 Movie Library` (matches Session 3 wiring list in overview §6). **(Removed in round 6, 2026-10-18: order is now `0 Deck · 1 Trackpad · 2 Movie Library` — no Bed Mode tab.)**
 - `IndexedStack` keeps every tab alive; switching tabs never resets scroll/gesture state (required for blind-mode muscle memory).
-- Bottom `NavigationBar` hides automatically once Bed Mode is active (full-screen gesture canvas, Doc 41) — the shell exposes `setTab(AppTab)` for programmatic pushes (e.g. QR pairing → Deck after Doc 32).
+- Bottom `NavigationBar` hides automatically once Bed Mode is active (full-screen gesture canvas, Doc 41) — the shell exposes `setTab(AppTab)` for programmatic pushes (e.g. QR pairing → Deck after Doc 32). **(Bed Mode removed in round 6, 2026-10-18 — auto-hide rule moot; `setTab` retained.)**
 - No routing package: navigation is shell-index switching plus `Navigator` for modals/sheets (Docs 39/40/37).
 
 ## 4. Internal Design
@@ -65,11 +71,11 @@ flowchart TD
   A --> S[AppShell: NavigationBar + IndexedStack]
   S --> T0[0 Deck — placeholder → Doc 36]
   S --> T1[1 Trackpad — placeholder → Doc 35]
-  S --> T2[2 Bed Mode — placeholder → Doc 41]
+  S --> T2[2 Bed Mode — placeholder → Doc 41 — removed in round 6, 2026-10-18]
   S --> T3[3 Library — placeholder → Doc 45]
   S -.setTab AppTab.deck.-> P[QR Pairing result path — Doc 32]
 ```
-State machine (tab index): `deck ↔ trackpad ↔ bedMode ↔ library` via bar taps; `bedMode →` any tab via `setTab` only (bar hidden). System back button on tab 0 exits app; on other tabs returns to tab 0 (Android `PopScope`).
+State machine (tab index): `deck ↔ trackpad ↔ bedMode ↔ library` via bar taps; `bedMode →` any tab via `setTab` only (bar hidden). System back button on tab 0 exits app; on other tabs returns to tab 0 (Android `PopScope`). **(Round 6, 2026-10-18: `bedMode` dropped — machine is `deck ↔ trackpad ↔ library`.)**
 
 ### 4.3 Lint contract (from Doc 01 §4.5)
 `include: package:flutter_lints/flutter.yaml`; overrides: `prefer_single_quotes: true`, `always_declare_return_types: true`, `avoid_print: true`, `lines_longer_than_80_chars: false` (effective 100). `flutter analyze` exit 0 is CI law; ignores need same-line reasons.
@@ -83,6 +89,7 @@ class _TrackpadPlaceholder extends StatelessWidget
     /// Tab 1 body — Session 3 wires Doc 35's VirtualTrackpad here.
 class _BedModePlaceholder extends StatelessWidget
     /// Tab 2 body — Session 3 wires Doc 41's BlindGesturePad here.
+    /// (Removed in round 6, 2026-10-18 — bed mode tab deleted.)
 class _LibraryPlaceholder extends StatelessWidget
     /// Tab 3 body — Session 3 wires Doc 45's MovieBrowser here.
 ```
@@ -116,6 +123,7 @@ Runtime request timing: CAMERA at scanner open (Doc 32); READ_PHONE_STATE at fir
 | `phone_state` | `^1.3.0` | Android telephony state stream (Doc 44) |
 | `vibration` | `^2.0.0` | Haptic patterns (Doc 42) |
 | `shared_preferences` | `^2.2.0` | Paired-PC cache, tokens, settings (Doc 34) |
+| `screen_brightness` | `^2.1.11` | **(round 6, 2026-10-18)** Controller app-window brightness (Doc 34 key `pp.display.brightness`, `DisplaySettingsCard` slider key `settings_brightness`) — application mode only, **no Android permission**; applied at startup in `main()` |
 
 Environment: `sdk: ">=3.5.0 <4.0.0"`, `flutter: ">=3.5.0"` (Flutter 3.x per overview; exact SDK pinned at scaffold). Dev: `flutter_test` (SDK), `flutter_lints: ^4.0.0`, `build_runner` **not** introduced (no codegen needed in Wave 1.A).
 **Internal docs:** [01_monorepo_structure.md](01_monorepo_structure.md) (lint contract §4.5) · [02_binary_udp_protocol_spec.md](02_binary_udp_protocol_spec.md) · [03_websocket_json_schema_spec.md](03_websocket_json_schema_spec.md) · [29_flutter_oled_theme_design_system.md](29_flutter_oled_theme_design_system.md) · [30_flutter_udp_datagram_sender.md](30_flutter_udp_datagram_sender.md) · [31_flutter_websocket_client_reconnect.md](31_flutter_websocket_client_reconnect.md) · [32_flutter_qr_scanner_mdns_pairing.md](32_flutter_qr_scanner_mdns_pairing.md) · [33_flutter_telemetry_state_provider.md](33_flutter_telemetry_state_provider.md) · [34_flutter_local_storage_connection_cache.md](34_flutter_local_storage_connection_cache.md) · [35](35_flutter_120hz_virtual_trackpad.md)/[36](36_flutter_custom_potplayer_deck_ui.md)/[41](41_flutter_blind_bed_mode_gestures.md)/[45](45_flutter_in_app_movie_library_browser.md) (tab bodies).
@@ -127,14 +135,14 @@ Environment: `sdk: ">=3.5.0 <4.0.0"`, `flutter: ">=3.5.0"` (Flutter 3.x per over
 - **Phone-state permission denied** → auto-pause hook (Doc 44) disabled with visible toggle-off; playback control unaffected.
 - **`flutter create` version drift** (Gradle/plugin templates) → scaffold pins `minSdk 21`, verifies Kotlin DSL defaults; failures surface at `flutter analyze`/build gate in §4.1 step 5.
 - **Tab body swap in Session 3** → placeholders implement the same `Widget build(BuildContext)` contract; wiring region comment marks the only editable zone to avoid clobbering `setTab` logic.
-- **Back-press semantics** → `PopScope`: non-deck tabs pop to deck first, deck exits (no accidental app kill from Bed Mode).
+- **Back-press semantics** → `PopScope`: non-deck tabs pop to deck first, deck exits (no accidental app kill from Bed Mode). **(Bed Mode gone in round 6, 2026-10-18 — pop-to-deck rule retained.)**
 - **Locale/text-scale** → MaterialApp forced `darkTheme` + `themeMode: dark`, `useMaterial3: true`; no light theme exists (AMOLED charter).
 - **Hot-restart vs pairing state** → no persistent side effects in shell construction; all connection state lives in Riverpod (Doc 33/34).
 
 ## 8. Acceptance Criteria
-- [ ] `flutter pub get` resolves with the six §6.1 packages; `pubspec.yaml` contains no other runtime deps.
+- [ ] `flutter pub get` resolves with the §6.1 packages (**seven** since round 6, 2026-10-18 — `screen_brightness` added; originally six); `pubspec.yaml` contains no other runtime deps.
 - [ ] `flutter analyze` exits 0 with Doc 01 lint overrides active.
-- [ ] `flutter test` green: shell shows 4 destinations in order, `IndexedStack` retains counter/state across tab switches, back-press pops to deck then exits.
+- [ ] `flutter test` green: shell shows 4 destinations in order *(3 destinations since round 6, 2026-10-18 — Bed Mode removed)*, `IndexedStack` retains counter/state across tab switches, back-press pops to deck then exits.
 - [ ] Manifest contains exactly the six §5.2 permissions; `minSdkVersion` ≥ 21.
 - [ ] `main.dart` has no feature imports outside the `// WIRING (Session 3)` region; `setTab` is public on the shell for Doc 32.
 - [ ] No PC IP/port/token hardcoded anywhere in `lib/`.
@@ -143,9 +151,9 @@ Environment: `sdk: ">=3.5.0 <4.0.0"`, `flutter: ">=3.5.0"` (Flutter 3.x per over
 ## 9. Test Plan
 | File | Asserts |
 |---|---|
-| `mobile_app/test/app_shell_test.dart` | Renders 4 `NavigationBar` destinations with correct labels; tapping switches `IndexedStack` child and retains per-tab state (elevated counter in placeholder survives two round-trips); `AppTab` indices match destination order; `PopScope` behavior on non-deck tabs |
+| `mobile_app/test/app_shell_test.dart` | Renders 4 `NavigationBar` destinations with correct labels *(3 since round 6, 2026-10-18)*; tapping switches `IndexedStack` child and retains per-tab state (elevated counter in placeholder survives two round-trips); `AppTab` indices match destination order; `PopScope` behavior on non-deck tabs |
 | `mobile_app/test/manifest_permissions_test.dart` | Parses `AndroidManifest.xml` (path-assert) and verifies the six §5.2 permission strings are present, no more, no fewer |
-Manual: `flutter run` on a physical Android device → dark splash, 4 tabs, tab state retention across 10 rapid switches; deny CAMERA → open scanner (Doc 32 later) still navigable; `flutter build apk --debug` installs and launches.
+Manual: `flutter run` on a physical Android device → dark splash, 4 tabs *(3 since round 6, 2026-10-18)*, tab state retention across 10 rapid switches; deny CAMERA → open scanner (Doc 32 later) still navigable; `flutter build apk --debug` installs and launches.
 
 ## 10. Assumptions & Open Questions
 **Assumptions:** (a) Package name `potpilot_remote` with org `com.potpilot` (blueprint silent — chosen once, referenced by Doc 28/Gradle signing in Session 3). (b) Dependency versions are provisional caret ranges chosen at planning time; `flutter pub get` at scaffold resolves the latest compatible — exact pins committed via `pubspec.lock` (tracked, per Doc 01 §4.2). (c) No routing package (no `go_router`) — `IndexedStack` + `Navigator` suffice and keep the dependency set frozen. (d) iOS is out of charter (overview ships an APK); `Info.plist` camera key is a Session 3+ concern if iOS is ever added. (e) `main.dart` hosts both `PotPilotApp` and the shell (blueprint lists only `main.dart` at `lib/` root — no extra top-level file invented). (f) Doc 29's theme file may not exist in Wave 1.A; fallback dark theme bridges until Session 2 wiring. (g) `phone_state ^1.3.0`/`vibration ^2.0.0` ranges verified as existing pub.dev packages at planning time; if resolution fails at scaffold, keep the package name (frozen) and widen only the range.

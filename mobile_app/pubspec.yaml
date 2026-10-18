@@ -7,7 +7,8 @@ environment:
   sdk: ">=3.5.0 <4.0.0"
   flutter: ">=3.5.0"
 
-# Frozen core dependency set (Doc 05 section 6.1) - no other runtime deps.
+# Core dependency set (Doc 05 section 6.1) + round-6 display control:
+# screen_brightness (app-window brightness only — no Android permission).
 dependencies:
   flutter:
     sdk: flutter
@@ -17,6 +18,7 @@ dependencies:
   phone_state: ^3.0.1
   vibration: ^2.0.0
   shared_preferences: ^2.2.0
+  screen_brightness: ^2.1.11
 
 dev_dependencies:
   flutter_test:

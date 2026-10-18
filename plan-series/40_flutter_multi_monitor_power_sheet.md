@@ -19,7 +19,7 @@
 - `mobile_app/lib/network/telemetry_provider.dart` — Doc 33; the frozen Doc 03 §5.6 frame carries `brightness` (int|null), `blackout_active`, and the flat `sleep_timer_active` / `sleep_timer_mode` / `sleep_timer_remaining_s` keys — this doc reads them via Doc 33's raw-frame hook (or a thin extension provider) since Doc 33's core `TelemetryState` fields are position/speed/volume only; staleness clock from Doc 33
 - `mobile_app/lib/core/storage/connection_cache.dart` — Doc 34: last-known brightness for slider warm-start
 - `mobile_app/lib/core/theme/oled_theme.dart` — Doc 29; `mobile_app/lib/core/haptics/haptic_engine.dart` — Doc 42 (slider detent ticks every 5 %, timer-armed thud)
-- `mobile_app/lib/features/bed_mode/blind_gesture_pad.dart` — Doc 41: right-edge brightness gesture reuses the same `BrightnessCommandBuilder` exported here (contract in §3)
+- `mobile_app/lib/features/bed_mode/blind_gesture_pad.dart` — Doc 41: right-edge brightness gesture reuses the same `BrightnessCommandBuilder` exported here (contract in §3) **(file removed with bed mode in round 6, 2026-10-18 — no remaining caller outside this sheet)**
 
 ## 3. Public Contract
 ```dart

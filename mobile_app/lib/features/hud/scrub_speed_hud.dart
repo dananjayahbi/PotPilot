@@ -21,6 +21,9 @@ import '../../network/telemetry_provider.dart';
 import '../../network/udp_sender.dart';
 import '../../network/ws_client.dart';
 import '../../network/ws_message_codec.dart';
+import 'scrub_track.dart';
+
+export 'scrub_track.dart' show ScrubTrack;
 
 /// Minimum spacing between UDP `0x04` SCRUB_SEEK preview packets (Doc 38
 /// §4.3 throttle (a): ~60 Hz cap around second-boundary oscillation).
@@ -94,8 +97,8 @@ int telemetryAgeMs(TelemetryState state) {
 /// Seek-drag phase (Doc 38 §4 state machine).
 enum ScrubPhase { idle, dragging, settling }
 
-/// Immutable thumb/label snapshot consumed by the HUD labels and the
-/// deck's bottom ruler.
+/// Immutable thumb/label snapshot consumed by [ScrubTrack], the HUD
+/// labels and the deck's bottom ruler.
 @immutable
 class ScrubPreview {
   const ScrubPreview({
@@ -144,8 +147,16 @@ class PotpilotScrubTransport extends ScrubTransport {
   const PotpilotScrubTransport();
 
   @override
-  void sendScrub(int targetSeconds) =>
-      UdpSender.instance.sendScrub(targetSeconds);
+  void sendScrub(int targetSeconds) {
+    if (!UdpSender.instance.isReady) {
+      // Round-6: the one silent failure mode left (Doc 30 breaker or
+      // unconfigured sender) — surface it once per trip instead of
+      // dropping previews invisibly.  The UdpRebindWatcher re-binds on
+      // the next WS connect, clearing this.
+      debugPrint('ScrubTransport: UDP not ready - preview packet dropped');
+    }
+    UdpSender.instance.sendScrub(targetSeconds);
+  }
 
   @override
   void sendSeek(int positionMs) {
@@ -546,7 +557,7 @@ class OsdBadge extends ConsumerWidget {
   }
 }
 
-/// Root HUD widget: time row + SpeedBadge + VolumeBadge over a
+/// Root HUD widget: ScrubTrack + SpeedBadge + VolumeBadge over a
 /// TelemetryNotifier watch (Public Contract).
 class ScrubSpeedHud extends ConsumerStatefulWidget {
   const ScrubSpeedHud({super.key, this.onScrubActiveChanged});
@@ -653,9 +664,13 @@ class _ScrubSpeedHudState extends ConsumerState<ScrubSpeedHud> {
             ],
           ),
           const SizedBox(height: 6),
-          // The generic top ScrubTrack moved to the deck's bottom ruler
-          // (Doc 36 ruler slider, 2026-10-17) — the controller, transport
-          // and time row stay shared.
+          // General seek bar (Doc 38, restored round 6): fast scrubbing at
+          // the top; the deck's bottom ruler stays the precision instrument.
+          ScrubTrack(
+            key: const Key('hud_track'),
+            dragController: _controller,
+            preview: preview,
+          ),
           const SizedBox(height: 4),
           Opacity(
             opacity: stale ? 0.45 : 1.0,

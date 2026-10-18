@@ -153,7 +153,7 @@ No wire packet is authored here — UDP stays Doc 30, WS frames stay Doc 31.
 - [31_flutter_websocket_client_reconnect.md](31_flutter_websocket_client_reconnect.md) — handshake transport; exports the `resolveHost/watchAgents` contract this doc implements (the **only** mDNS implementation in the app).
 - [34_flutter_local_storage_connection_cache.md](34_flutter_local_storage_connection_cache.md) — `PcHostRecord` persistence, active-host selection.
 - [33_flutter_telemetry_state_provider.md](33_flutter_telemetry_state_provider.md) — bound to the fresh session after `persisting`.
-- [30_flutter_udp_datagram_sender.md](30_flutter_udp_datagram_sender.md) — `UdpSender.configure(host, tokenHex)` is invoked at `paired` (or by the deck on entry) using the persisted record.
+- [30_flutter_udp_datagram_sender.md](30_flutter_udp_datagram_sender.md) — `UdpSender.configure(host, tokenHex)` is invoked at `paired` using the persisted record. **(Round-6 correction, 2026-10-18: the original also claimed "(or by the deck on entry)" — no such invocation ever existed; re-`configure()` now happens on every WS `connected` transition via Doc 30's `UdpRebindWatcher` instead.)**
 - [16_pc_zeroconf_mdns_broadcaster.md](16_pc_zeroconf_mdns_broadcaster.md) / [17_pc_qr_connection_payload_gen.md](17_pc_qr_connection_payload_gen.md) — server-side peers mirrored here.
 - [05_flutter_app_boilerplate_deps.md](05_flutter_app_boilerplate_deps.md) — deck route constant + `AndroidManifest` camera permission.
 
@@ -164,7 +164,7 @@ No wire packet is authored here — UDP stays Doc 30, WS frames stay Doc 31.
 | `flutter_riverpod` | `pairingProvider` (StateNotifier wrapping `PairingController`) |
 | `shared_preferences` | via Doc 34 only |
 
-**mDNS (deliberately no package):** the Doc 05 pubspec is frozen to six runtime deps ("no other runtime deps" acceptance), so the mDNS browser is implemented **in-file** over `dart:io` (`RawDatagramSocket` multicast to `224.0.0.251:5353`, parsing only the DNS-SD subset PTR `_potpilot._tcp.local.` + SRV + TXT + A) and the Android `MulticastLock` is acquired via a small MethodChannel into `WifiManager` (the `CHANGE_WIFI_MULTICAST_STATE` manifest permission is already owned by Doc 05). Design notes in §10.
+**mDNS (deliberately no package):** the Doc 05 pubspec was frozen to six runtime deps ("no other runtime deps" acceptance; **seven since round 6, 2026-10-18** — `screen_brightness` added), so the mDNS browser is implemented **in-file** over `dart:io` (`RawDatagramSocket` multicast to `224.0.0.251:5353`, parsing only the DNS-SD subset PTR `_potpilot._tcp.local.` + SRV + TXT + A) and the Android `MulticastLock` is acquired via a small MethodChannel into `WifiManager` (the `CHANGE_WIFI_MULTICAST_STATE` manifest permission is already owned by Doc 05). Design notes in §10.
 
 ## 7. Edge Cases & Failure Handling
 
@@ -216,7 +216,7 @@ No wire packet is authored here — UDP stays Doc 30, WS frames stay Doc 31.
 ## 10. Assumptions & Open Questions
 
 - **QR payload keys** — resolved: frozen by Doc 17 §5 (`v`, `host`, `ips`, `udp`, `ws`, `token`); `tryParse` maps exactly those six keys, and `v != 1` ⇒ `unsupportedVersion`.
-- **mDNS implementation:** hand-rolled minimal DNS-SD browse over `dart:io` raw multicast sockets + a `MulticastLock` MethodChannel — chosen because Doc 05 froze the pubspec to six runtime deps (`nsd`/`multicast_dns` may not be added). Only the PTR/SRV/TXT/A subset for `_potpilot._tcp.local.` is parsed; unknown records are ignored, never crashing the listener.
+- **mDNS implementation:** hand-rolled minimal DNS-SD browse over `dart:io` raw multicast sockets + a `MulticastLock` MethodChannel — chosen because Doc 05 froze the pubspec to six runtime deps (`nsd`/`multicast_dns` may not be added; seven since round 6, 2026-10-18 — `screen_brightness`, still no mDNS package). Only the PTR/SRV/TXT/A subset for `_potpilot._tcp.local.` is parsed; unknown records are ignored, never crashing the listener.
 - **TXT keys** `udp`/`ws`/`ver` confirmed against Doc 16; missing TXT ⇒ trust the frozen ports 50505/50506; `ver` mismatch is logged and the record still used for IP discovery only.
 - **Manual token entry** (paste 32-hex) is the no-camera pairing fallback — the secret cannot come from mDNS (Doc 16 forbids it), so Doc 05's "mDNS/manual path" is realized as mDNS discovery + manual token.
 - **Deck transition** assumed to be the Doc 05 shell's deck destination (`AppTab` index 0): pairing completes by calling the shell's public `setTab` for the deck, then `reset()` is available for re-pair; final wiring happens in Session 3 Wave 3.A.

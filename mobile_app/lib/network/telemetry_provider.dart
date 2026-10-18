@@ -451,7 +451,7 @@ class TelemetryNotifier extends StateNotifier<TelemetryState> {
 }
 
 /// The app-wide telemetry source of truth. App-lifetime (`autoDispose`
-/// defaults to false) — consumed by deck/HUD/bed-mode/volume surfaces.
+/// defaults to false) — consumed by deck/HUD/volume surfaces.
 final StateNotifierProvider<TelemetryNotifier, TelemetryState>
 telemetryProvider =
     StateNotifierProvider<TelemetryNotifier, TelemetryState>((ref) {

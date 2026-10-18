@@ -2,6 +2,8 @@
 
 > Part of PotPilot plan-series · Category H · Session 2 Wave 2.B · Flutter App
 
+> **⚠️ REMOVED IN ROUND 6 (2026-10-18).** Bed mode was cut from the app: `mobile_app/lib/features/bed_mode/` and its tests were deleted, the shell was reduced to 3 tabs (`deck`, `trackpad`, `library` — Doc 05 §3), and the replacement feature is the trackpad **keyboard trigger zone** ([37_flutter_full_pc_keyboard_sheet.md](37_flutter_full_pc_keyboard_sheet.md) §11). The spec below is retained for history only — none of it is implemented any more.
+
 ## 1. Purpose & Scope
 **Delivers** `blind_gesture_pad.dart` — the eyes-free full-screen gesture canvas for operating the PC from bed without looking: **single tap = Play/Pause**, **horizontal swipe/hold = scrubbing with 60-second haptic minute ticks**, **two-finger vertical slide = Volume**, **right-edge slide = Monitor DDC/CI Brightness**. Every gesture gives differentiated haptics (Doc 42) so state is felt, not seen.
 

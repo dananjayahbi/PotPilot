@@ -155,3 +155,12 @@ Catalog frozen in [03_websocket_json_schema_spec.md](03_websocket_json_schema_sp
 - **Assumption:** Win doubles as tap (Start) and one-shot latch (Win+X combos); arrows/Backspace/Enter are `repeatable`, F-keys are not.
 - **Assumption:** `mobile_app/test/...` mirrors `lib/` (Flutter standard); the blueprint only enumerates `lib/` paths.
 - **Open:** should the sheet offer a "numpad" secondary page? Deferred — not in the Doc 37 brief; add later as a `KeySpec` page flag without file changes elsewhere.
+
+## 11. Round-6 Addendum — Trackpad Keyboard Trigger Zone (2026-10-18)
+
+Replacement for the removed bed mode (Doc 41 banner) — a lightweight "open the phone keyboard" entry point on the trackpad screen:
+
+- **File:** `mobile_app/lib/features/trackpad/keyboard_trigger_overlay.dart` (`KeyboardTriggerOverlay`, Doc 37 companion), docked in `main.dart`'s `_TrackpadPlaceholder` `Stack` as `Positioned(top: 8, right: 8)` — a **48×48 dp chip** (WCAG-sized target, key `trackpad_keyboard_trigger`) top-right over the trackpad; it is the Stack's only hit-testable child, so chip taps never reach the trackpad underneath (no phantom cursor moves).
+- **IME bridge:** tapping the chip focuses a **hidden 1×1 `TextField`** (key `trackpad_keyboard_input`, wrapped in `IgnorePointer`, focus requested programmatically only) so Flutter's `EditableText` owns the phone IME connection (show/hide/composing/reconnect). Tapping the chip again unfocuses (acts as close while the IME is up); the icon flips `keyboard` / `keyboard_hide` and colors track focus (amber) / open (crimson) / disconnected (tertiary).
+- **Diff forwarding:** every edit is diffed against the last-sent value (common-prefix): diverged suffix removed → `KeyboardController.tapSpecial(backspace)` → `SEND_KEY {vk: 8}` per char; appended runes → `tapChar` → coalesced `SEND_TEXT` (50 ms / ≤64-char flush, §4.3 unchanged); **submit → `SEND_KEY {vk: 13}`** (Enter) while keeping the field focused. WS-down contract is the existing §7 one: the controller queues text but drops key envelopes.
+- **Tests:** `mobile_app/test/features/trackpad/keyboard_trigger_overlay_test.dart` — chip focuses the hidden field (IME gate), typed text flushes as one `SEND_TEXT` after the coalesce window, deletions forward `SEND_KEY {"vk": 8}`, submit forwards `{"vk": 13}`, chip taps never reach the trackpad.

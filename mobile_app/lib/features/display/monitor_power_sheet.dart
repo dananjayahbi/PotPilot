@@ -93,11 +93,10 @@ class DisplayCache {
   }
 }
 
-/// Pure builders for the throttled system envelopes (shared with Doc 41).
+/// Pure builders for the throttled system envelopes.
 ///
 /// Every builder returns the complete wire envelope
-/// `{type, action, payload}` so callers (this drawer, the Doc 41 edge
-/// gesture) dispatch byte-identical frames.
+/// `{type, action, payload}` so callers dispatch byte-identical frames.
 class SystemCommandBuilder {
   SystemCommandBuilder._();
 

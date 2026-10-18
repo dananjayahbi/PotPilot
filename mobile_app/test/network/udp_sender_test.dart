@@ -575,5 +575,22 @@ void main() {
       expect(sender.ioErrorCount, errorsAfterTrip);
       expect(sender.droppedCount, greaterThan(0));
     });
+
+    test('configure() after a trip restores isReady and sending (round-6 '
+        'WS-reconnect re-bind path)', () async {
+      await sender.configure(host: '127.0.0.1', tokenHex: _tokenForAuth(0x5A));
+      sender.sendSink = (Uint8List _) => throw const SocketException('net down');
+      for (var i = 0; i < kUdpErrorBreakerThreshold; i++) {
+        sender.sendScroll(1, 1);
+      }
+      expect(sender.isReady, isFalse); // permanent trip with no re-configure
+
+      sender.sendSink = null;
+      await sender.configure(host: '127.0.0.1', tokenHex: _tokenForAuth(0x5A));
+      expect(sender.isReady, isTrue); // breaker fully cleared
+      final drops = sender.droppedCount;
+      sender.sendScroll(1, 1); // real socket bind - no silent drop
+      expect(sender.droppedCount, drops);
+    });
   });
 }

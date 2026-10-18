@@ -106,7 +106,7 @@ Error payload: `{"ok": false, "error": "E_NO_ENDPOINT" | "E_COREAUDIO" | "E_BAD_
 - [18_pc_telemetry_broadcast_loop.md](18_pc_telemetry_broadcast_loop.md) — registers `snapshot()` as source `"audio"`.
 - [10_potplayer_wm_user_telemetry_poller.md](10_potplayer_wm_user_telemetry_poller.md) — cross-reference: PotPlayer `volume` telemetry is separate by design.
 - [09_potplayer_wm_command_dispatcher.md](09_potplayer_wm_command_dispatcher.md) — cross-reference: PotPlayer-internal volume commands live there, not here.
-- [43_flutter_hardware_volume_button_hijack.md](43_flutter_hardware_volume_button_hijack.md), [40_flutter_multi_monitor_power_sheet.md](40_flutter_multi_monitor_power_sheet.md), [41_flutter_blind_bed_mode_gestures.md](41_flutter_blind_bed_mode_gestures.md) — command senders.
+- [43_flutter_hardware_volume_button_hijack.md](43_flutter_hardware_volume_button_hijack.md), [40_flutter_multi_monitor_power_sheet.md](40_flutter_multi_monitor_power_sheet.md), [41_flutter_blind_bed_mode_gestures.md](41_flutter_blind_bed_mode_gestures.md) — command senders. *(Doc 41 removed in round 6, 2026-10-18.)*
 - [04_pc_agent_boilerplate_deps.md](04_pc_agent_boilerplate_deps.md) — requirements.txt must include this module's two packages.
 
 **External**
