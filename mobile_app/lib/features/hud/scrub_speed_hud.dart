@@ -94,7 +94,8 @@ int telemetryAgeMs(TelemetryState state) {
 /// Seek-drag phase (Doc 38 §4 state machine).
 enum ScrubPhase { idle, dragging, settling }
 
-/// Immutable thumb/label snapshot handed to [ScrubTrack].
+/// Immutable thumb/label snapshot consumed by the HUD labels and the
+/// deck's bottom ruler.
 @immutable
 class ScrubPreview {
   const ScrubPreview({
@@ -201,6 +202,11 @@ class ScrubController extends ChangeNotifier {
   double _dragAnchorMs = 0;
   double _accumDx = 0;
 
+  /// Scaled-mode accumulator (ruler): milliseconds instead of pixels —
+  /// each gesture event contributes `dx * msPerPx`, so the velocity tiers
+  /// decide how far a swipe travels (Doc 36 ruler slider, 2026-10-17).
+  double _accumMs = 0;
+
   /// Display position: drag target while dragging, committed target (or a
   /// newer accepted telemetry frame) while settling.
   int _targetMs = 0;
@@ -218,7 +224,8 @@ class ScrubController extends ChangeNotifier {
   bool get dragging => _phase == ScrubPhase.dragging;
   bool get settling => _phase == ScrubPhase.settling;
 
-  /// Immutable snapshot for [ScrubTrack]; idle follows telemetry position.
+  /// Immutable snapshot for the HUD labels and deck ruler; idle follows
+/// telemetry position.
   ScrubPreview get preview => ScrubPreview(
         positionMs:
             _phase == ScrubPhase.idle ? _lastState.positionMs : _targetMs,
@@ -238,7 +245,7 @@ class ScrubController extends ChangeNotifier {
       if (durationChanged) {
         // Duration re-read each frame: thumb fraction re-clamps on the
         // next updateDrag; repaint now so the rail matches the new total.
-        notifyListeners();
+        _notify();
       }
       return;
     }
@@ -252,12 +259,12 @@ class ScrubController extends ChangeNotifier {
         return;
       }
       _targetMs = state.positionMs; // newer but still far: thumb follows
-      notifyListeners();
+      _notify();
       return;
     }
 
     if (state.positionMs != previous.positionMs || durationChanged) {
-      notifyListeners(); // idle: thumb/labels track the new frame
+      _notify(); // idle: thumb/labels track the new frame
     }
   }
 
@@ -275,12 +282,13 @@ class ScrubController extends ChangeNotifier {
     _trackWidth = trackWidth <= 0 ? 1 : trackWidth;
     _dragAnchorMs = _clampTarget(_lastState.positionMs, duration).toDouble();
     _accumDx = 0;
+    _accumMs = 0;
     _targetMs = _dragAnchorMs.round();
     _lastSentSecond = null;
     _lastSendAtMs = null;
     _minuteIndex = _targetMs ~/ 60000;
     onActiveChanged?.call(true);
-    notifyListeners();
+    _notify();
   }
 
   /// Applies pointer delta -> preview position and streams throttled UDP
@@ -298,11 +306,31 @@ class ScrubController extends ChangeNotifier {
     // Anchor in ms so a mid-drag duration change re-clamps fraction-style
     // without ever producing an out-of-range target (§7).
     final double raw = _dragAnchorMs + (_accumDx / _trackWidth) * duration;
+    _commitDragTarget(raw, duration);
+  }
+
+  /// Scaled-mode drag (ruler slider): applies an already-scaled delta in
+  /// **milliseconds** — the caller resolved swipe velocity into a time
+  /// frame first (1 s … 5 min per notch). Shares the throttled UDP
+  /// streaming, minute haptics and clamping of [updateDrag].
+  void updateDragByMs(double deltaMs) {
+    if (_phase != ScrubPhase.dragging) {
+      return;
+    }
+    final int duration = _lastState.durationMs;
+    if (duration <= 0) {
+      return;
+    }
+    _accumMs += deltaMs;
+    _commitDragTarget(_dragAnchorMs + _accumMs, duration);
+  }
+
+  void _commitDragTarget(double raw, int duration) {
     final int target = _clampTarget(raw.round(), duration);
     _tickMinuteBoundary(target);
     _targetMs = target;
     _streamThrottled(target);
-    notifyListeners();
+    _notify();
   }
 
   /// Commits the final WS `SEEK {"position_ms": targetMs}` (plus one last
@@ -326,7 +354,7 @@ class ScrubController extends ChangeNotifier {
     }
     _phase = ScrubPhase.settling;
     _startSettleTimer();
-    notifyListeners();
+    _notify();
   }
 
   /// Aborts the drag (rotation / sheet overlay): commit only when the
@@ -407,16 +435,48 @@ class ScrubController extends ChangeNotifier {
     return timer;
   }
 
+  bool _disposed = false;
+
+  /// Notifies listeners, deferring to the end of the current frame when
+  /// invoked mid-build: the HUD feeds telemetry from `build()`, and a
+  /// phase-change notification would otherwise mark sibling listeners (the
+  /// deck's ruler `ListenableBuilder`) dirty while the framework is already
+  /// building — a debug assertion failure (and a missed rebuild) in prod.
+  void _notify() {
+    final SchedulerBinding? binding = _bindingOrNull();
+    if (binding != null &&
+        binding.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      binding.addPostFrameCallback((_) {
+        if (!_disposed) {
+          notifyListeners();
+        }
+      });
+      return;
+    }
+    notifyListeners();
+  }
+
+  /// [SchedulerBinding.instance] throws before a binding exists (pure-Dart
+  /// unit tests); those notify synchronously, exactly as before.
+  static SchedulerBinding? _bindingOrNull() {
+    try {
+      return SchedulerBinding.instance;
+    } on Error {
+      return null;
+    }
+  }
+
   void _exitToIdle() {
     _settleTimer?.cancel();
     _settleTimer = null;
     _phase = ScrubPhase.idle;
     onActiveChanged?.call(false);
-    notifyListeners();
+    _notify();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _settleTimer?.cancel();
     _settleTimer = null;
     super.dispose();
@@ -436,113 +496,6 @@ final Provider<ScrubController> scrubControllerProvider =
   ref.onDispose(controller.dispose);
   return controller;
 });
-
-/// The draggable timeline track: rail + thumb painted by [_RailPainter],
-/// horizontal-drag gestures (vertical hit-slop comes from Flutter's
-/// horizontal recognizer, ~16 dp) forwarded to [dragController].
-class ScrubTrack extends StatefulWidget {
-  const ScrubTrack({
-    super.key,
-    required this.dragController,
-    required this.preview,
-  });
-
-  final ScrubController dragController;
-  final ScrubPreview preview;
-
-  @override
-  State<ScrubTrack> createState() => _ScrubTrackState();
-}
-
-class _ScrubTrackState extends State<ScrubTrack> {
-  double _trackWidth = 1;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        _trackWidth = constraints.maxWidth <= 0 ? 1 : constraints.maxWidth;
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onHorizontalDragStart: (DragStartDetails details) =>
-              widget.dragController.beginDrag(_trackWidth),
-          onHorizontalDragUpdate: (DragUpdateDetails details) =>
-              widget.dragController.updateDrag(details.primaryDelta ?? 0),
-          onHorizontalDragEnd: (DragEndDetails details) =>
-              widget.dragController.endDrag(),
-          onHorizontalDragCancel: () => widget.dragController.cancelDrag(),
-          child: SizedBox(
-            height: 48, // comfortable gesture band around the 3 dp rail
-            child: CustomPaint(
-              size: Size.infinite, // fill the LayoutBuilder width
-              painter: _RailPainter(widget.preview),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// Rail (25 % amber) + elapsed fill (Doc 29 amber accent) + thumb
-/// (14 dp, grows to 18 dp while dragging).
-class _RailPainter extends CustomPainter {
-  const _RailPainter(this.preview);
-
-  final ScrubPreview preview;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final double midY = size.height / 2;
-    const double railHeight = 3;
-    const Radius radius = Radius.circular(railHeight / 2);
-    final RRect track = RRect.fromRectAndRadius(
-      Rect.fromLTWH(0, midY - railHeight / 2, size.width, railHeight),
-      radius,
-    );
-    canvas.drawRRect(
-      track,
-      Paint()..color = AppColors.amber.withValues(alpha: 0.25),
-    );
-
-    if (preview.durationMs <= 0) {
-      return; // zero/unknown duration: empty rail only (§7)
-    }
-    final double fraction = (preview.positionMs / preview.durationMs)
-        .clamp(0.0, 1.0)
-        .toDouble();
-    if (fraction > 0) {
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(
-            0,
-            midY - railHeight / 2,
-            size.width * fraction,
-            railHeight,
-          ),
-          radius,
-        ),
-        Paint()..color = AppColors.amber,
-      );
-    }
-
-    final double thumbRadius = preview.dragging ? 9 : 7; // 18 dp / 14 dp
-    final double minX = thumbRadius;
-    final double maxX = size.width - thumbRadius;
-    final double x = maxX <= minX
-        ? size.width / 2
-        : (size.width * fraction).clamp(minX, maxX);
-    canvas.drawCircle(
-      Offset(x, midY),
-      thumbRadius,
-      Paint()..color = AppColors.amber,
-    );
-  }
-
-  @override
-  bool shouldRepaint(_RailPainter oldDelegate) =>
-      oldDelegate.preview != preview;
-}
 
 /// OSD badge kind (Doc 38 §3): display-only pills, no dispatch.
 enum OsdBadgeKind { speed, volume }
@@ -593,7 +546,7 @@ class OsdBadge extends ConsumerWidget {
   }
 }
 
-/// Root HUD widget: ScrubTrack + SpeedBadge + VolumeBadge over a
+/// Root HUD widget: time row + SpeedBadge + VolumeBadge over a
 /// TelemetryNotifier watch (Public Contract).
 class ScrubSpeedHud extends ConsumerStatefulWidget {
   const ScrubSpeedHud({super.key, this.onScrubActiveChanged});
@@ -700,11 +653,9 @@ class _ScrubSpeedHudState extends ConsumerState<ScrubSpeedHud> {
             ],
           ),
           const SizedBox(height: 6),
-          ScrubTrack(
-            key: const Key('hud_track'),
-            dragController: _controller,
-            preview: preview,
-          ),
+          // The generic top ScrubTrack moved to the deck's bottom ruler
+          // (Doc 36 ruler slider, 2026-10-17) — the controller, transport
+          // and time row stay shared.
           const SizedBox(height: 4),
           Opacity(
             opacity: stale ? 0.45 : 1.0,

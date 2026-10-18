@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:potpilot_remote/core/haptics/haptic_engine.dart';
 import 'package:potpilot_remote/core/theme/oled_theme.dart';
+import 'package:potpilot_remote/features/deck/ruler/ruler_seek_slider.dart';
 import 'package:potpilot_remote/features/hud/scrub_speed_hud.dart';
 import 'package:potpilot_remote/network/telemetry_provider.dart';
 import 'package:potpilot_remote/network/ws_client.dart';
@@ -112,6 +113,9 @@ void main() {
           ref.onDispose(controller.dispose);
           return controller;
         }),
+        // The ruler reads this provider on every notch tick; the controller's
+        // own haptics go through its injected playHaptic (captured above).
+        hapticEngineProvider.overrideWith((ref) => HapticEngine.noOp()),
       ];
 
   Future<void> pumpHud(WidgetTester tester) async {
@@ -121,7 +125,14 @@ void main() {
         child: MaterialApp(
           theme: buildOledTheme(),
           home: Scaffold(
-            body: ScrubSpeedHud(onScrubActiveChanged: activeLog.add),
+            body: Column(
+              children: <Widget>[
+                ScrubSpeedHud(onScrubActiveChanged: activeLog.add),
+                // The deck ruler is the prod gesture surface these drag
+                // tests drive (the old top track was replaced by it).
+                const RulerSeekSlider(enabled: true),
+              ],
+            ),
           ),
         ),
       ),
@@ -133,19 +144,20 @@ void main() {
       tester.widget<Text>(find.byKey(const Key('hud_time_left'))).data ?? '';
 
   testWidgets(
-    'drag across the track streams UDP, freezes labels, commits SEEK, settles',
+    'drag across the ruler streams UDP, freezes labels, commits SEEK, settles',
     (WidgetTester tester) async {
       push(positionMs: 5050000, durationMs: 8100000); // 01:24:10 / 02:15:00
       await pumpHud(tester);
 
-      // Idle: labels track telemetry (acceptance example).
-      expect(find.text('01:24:10'), findsOneWidget);
+      // Idle: labels track telemetry (acceptance example).  The ruler bubble
+      // mirrors the same position, so scope the match to the HUD row.
+      expect(leftLabel(tester), '01:24:10');
       expect(find.text('02:15:00'), findsOneWidget);
       expect(activeLog, isEmpty);
 
       // Drag leftward across the track (past touch slop, no right-edge clamp).
       final TestGesture gesture = await tester.startGesture(
-        tester.getCenter(find.byKey(const Key('hud_track'))),
+        tester.getCenter(find.byKey(const Key('ruler_track'))),
       );
       await gesture.moveBy(const Offset(-60, 0));
       await tester.pump();
@@ -227,7 +239,7 @@ void main() {
     expect(find.text('00:00:00'), findsOneWidget);
 
     final TestGesture gesture = await tester.startGesture(
-      tester.getCenter(find.byKey(const Key('hud_track'))),
+      tester.getCenter(find.byKey(const Key('ruler_track'))),
     );
     await gesture.moveBy(const Offset(120, 0));
     await tester.pump();

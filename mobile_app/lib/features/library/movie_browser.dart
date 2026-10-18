@@ -39,6 +39,7 @@ import '../../core/theme/oled_theme.dart';
 import '../../network/telemetry_provider.dart';
 import '../../network/ws_client.dart';
 import '../../network/ws_message_codec.dart';
+import '../settings/settings_screen.dart';
 import 'library_sections.dart';
 import 'thumbnail_cache.dart';
 
@@ -1123,6 +1124,16 @@ class MovieBrowserScreen extends ConsumerWidget {
             tooltip: 'Refresh library',
             onPressed: () => unawaited(notifier.refresh(force: true)),
             icon: const Icon(Icons.refresh),
+          ),
+          IconButton(
+            key: const Key('library_settings_button'),
+            tooltip: 'Settings',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const SettingsScreen(),
+              ),
+            ),
+            icon: const Icon(Icons.settings_outlined),
           ),
         ],
       ),

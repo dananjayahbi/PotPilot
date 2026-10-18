@@ -166,3 +166,20 @@ Action catalog is the frozen registry in [03_websocket_json_schema_spec.md](03_w
 - **Assumption:** debounce = 80 ms; `potplayer_running` false disables the grid (kill-switch semantics).
 - **Note (cross-doc consistency):** [42_flutter_haptic_feedback_engine.md](42_flutter_haptic_feedback_engine.md)'s illustrative table says `SET_SPEED {speed:1.0}` — the frozen field name is `multiplier`; Doc 42's wording should follow Doc 03 (no payload crosses Doc 42's API, so no functional impact).
 - **Open:** none blocking implementation.
+
+## 11. Round-5 Addendum — Ruler Seek Slider, Volume Popup, Settings (2026-10-17)
+
+User-driven redesign on top of §1–§10 (the generic top scrub track was "too small for a phone screen to slide precisely"):
+
+- **Deck header row** (`deck_header_row.dart`): `DeckHeaderRow` = file caption (`deck_caption`) + `DeckVolumeButton` (`deck_volume_button`) + gear (`deck_settings_button`) → pushes `SettingsScreen`.
+- **Volume popup** (`volume_popup.dart`): `showVolumePopup` keeps the old bottom-row semantics verbatim — optimistic drag preview, telemetry always wins, `SET_VOLUME {percent}` on release, WS-down/running gates; slider keys `deck_volume` / `deck_volume_value` preserved for tests.
+- **Speed-sensing ruler** (`ruler/`), the bottom universal scrubber:
+  - `seek_scale.dart` (pure Dart): 7 tiers (`1 s → 5 m` per 24 px notch; entries 0/150/400/800/1500/2500/4000 px/s), instant climb + 65 % drop hysteresis (`SeekTierResolver`, sign-agnostic so fast backward flicks climb too), `clampGestureMs` caps one gesture at ±5 min, `formatDeltaLabel` renders `+18 s` / `−2:34` (U+2212).
+  - `ruler_painter.dart`: ticks scroll under a fixed amber centre needle + foot dot; major labels at `labelEvery` cadence so labels always read round numbers.
+  - `ruler_seek_slider.dart`: EMA velocity picks the tier per notch; notch micro-ticks, tier double-ticks, minute ticks (shared engine); release projects a flick (`v · msPerPx · 0.12 s`); tap = fine jump in the tapped zone using track-space coordinates (`_trackKey`, padding-aware). Keys: `ruler_track` / `ruler_time` / `ruler_tier` / `ruler_delta` / `ruler_hint`.
+  - All travel flows through `ScrubController.updateDragByMs` (scaled mode) → identical UDP preview throttle, WS `SEEK {position_ms}` commit, settle convergence, overshoot guard and minute haptics as the legacy track.
+- **`ScrubTrack` + `_RailPainter` removed** from the Doc 38 HUD (dead once the ruler landed). The HUD keeps badges + time row and stays the telemetry→controller feed.
+- **`ScrubController._notify()` contract**: notifications raised mid-build (the HUD feeds telemetry from `build()`) defer to end-of-frame — sibling listeners (the ruler's `ListenableBuilder`) must never get `setState` during build; pure-Dart unit tests (no binding) still notify synchronously.
+- **Settings screen** (`features/settings/settings_screen.dart`): trackpad cursor speed 0.2–3.0 (0.05 steps) with live `×N.NN` badge + Slow/Default/Fast/Max presets; write-through `ConnectionCache.saveTrackpadProfile` (Doc 34 key `pp.trackpad.profile.v1`); entries = deck header gear + library app-bar gear (`library_settings_button`).
+- **PC seek chain (Doc 10 companion, agent side):** absolute `SEEK` and UDP `0x04` scrub targets rebase `SeekBaseTracker` after `ok` — ruler/tap commits can no longer be snapped back by the next `SEEK_DELTA`; `COALESCE_WINDOW_S` 0.8 s → 1.5 s so ~1 Hz human tap bursts stay chained.
+- **Tests:** new `test/features/deck/ruler/seek_scale_test.dart`, `test/features/deck/ruler/ruler_seek_slider_test.dart`, `test/features/settings/settings_screen_test.dart`; `scrub_speed_hud_test` now drives the ruler (the prod gesture surface); `deck_step_volume_test`'s volume group opens the popup via `deck_volume_button`.

@@ -63,5 +63,6 @@ def test_record_never_negative_target_guard_is_router_side():
     assert tracker.next_base(0) == -5
 
 
-def test_default_window_is_sub_second():
-    assert COALESCE_WINDOW_S == 0.8
+def test_default_window_outlasts_a_human_tap_pause():
+    # ~1 Hz bursts chain correctly (0.8 s dropped chains at ~0.9 s pauses).
+    assert COALESCE_WINDOW_S == 1.5

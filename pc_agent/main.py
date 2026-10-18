@@ -443,7 +443,11 @@ async def run_agent(argv: list[str] | None = None) -> int:
 
         def _scrub_sink(target_seconds: int) -> None:
             """UDP 0x04 scrub target (seconds) → Doc 09 absolute seek (ms)."""
-            dispatcher.seek_ms(int(target_seconds) * 1000)
+            target_ms = int(target_seconds) * 1000
+            result = dispatcher.seek_ms(target_ms)
+            if result.ok:
+                # Keep the delta chain anchored to where scrubbing left off.
+                seek_tracker.record(target_ms)
 
         async def _progress_provider() -> tuple[int, int, bool]:
             snapshot = poller.latest
@@ -504,7 +508,13 @@ async def run_agent(argv: list[str] | None = None) -> int:
             action = str(envelope.action)
             try:
                 if action == Action.SEEK:
-                    result = dispatcher.seek_ms(int(payload["position_ms"]))
+                    position_ms = int(payload["position_ms"])
+                    result = dispatcher.seek_ms(position_ms)
+                    # Rebase: an absolute seek (ruler/tap commit) invalidates the
+                    # delta chain — without this the next SEEK_DELTA chained off
+                    # the pre-seek base and snapped the position back.
+                    if result.ok:
+                        seek_tracker.record(position_ms)
                 elif action == Action.SEEK_DELTA:
                     snapshot = poller.latest
                     current = int(snapshot.position_ms) if snapshot is not None else 0

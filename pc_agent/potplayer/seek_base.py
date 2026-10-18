@@ -7,8 +7,9 @@ nearly the same target — the user's "it starts again where we started tapping"
 This tracker keeps a short-lived truth for "where we just seeked to" so each
 new delta chains from the previous target instead of the stale snapshot.
 
-Scope: used ONLY by the router's SEEK_DELTA arithmetic; absolute SEEK leaves
-the base untouched (scrub taps stay snapshot-driven).
+Scope: used by the router's SEEK_DELTA arithmetic; absolute SEEK and UDP scrub
+targets REBASE the tracker (only after a successful dispatch) so a burst that
+mixes scrubbing and stepping never chains off a pre-scrub position.
 """
 
 from __future__ import annotations
@@ -17,8 +18,12 @@ import threading
 import time
 from collections.abc import Callable
 
-COALESCE_WINDOW_S = 0.8
-"""Chaining horizon: taps further apart than this trust the fresh snapshot again."""
+COALESCE_WINDOW_S = 1.5
+"""Chaining horizon: taps further apart than this trust the fresh snapshot again.
+
+Human forward/back bursts tap at roughly 1 Hz, so the window must outlast a
+realistic pause between taps (0.8 s dropped the chain at ~0.9 s, re-introducing
+the stale-snapshot snap-back mid-burst)."""
 
 
 class SeekBaseTracker:

@@ -1,11 +1,14 @@
 // Doc 36 (deck redesign): PotPlayer remote deck — the app's primary
 // control tab, laid out for one-hand reach in a dark room.
 //
-// Hierarchy (top → bottom): Doc 38's ScrubSpeedHud timeline header; the
-// compact secondary rows (fixed ±30 s jumps + frame stepping, speed keys
-// + badge, fullscreen/aspect/tracks); then the transport cluster — big
-// rewind / Play-Pause / forward — anchored in the lower half, the
-// segmented seek-step selector it is driven by, and the volume slider.
+// Hierarchy (top → bottom): Doc 38's ScrubSpeedHud timeline header
+// (badges + time readout); the deck header row (file caption + volume
+// popup button + Settings gear); the compact secondary rows (fixed
+// ±30 s jumps + frame stepping, speed keys + badge, fullscreen/aspect/
+// tracks); then the transport cluster — big rewind / Play-Pause /
+// forward — anchored in the lower half, the segmented seek-step selector
+// it is driven by, and — at the very bottom — the speed-sensing ruler
+// seek slider (round 5, 2026-10-17) that replaced the tiny top track.
 // Every key dispatches guaranteed-delivery Doc 03 `CMD_POTPLAYER`
 // envelopes over Doc 31's `WsClient`; optimistic play feedback reconciles
 // against 250 ms Doc 33 telemetry. Seeks are parameterised by the chosen
@@ -14,7 +17,9 @@
 // Test-visible contracts live on: [deckKeyFor] keys on every
 // [DeckAction] key (all rendered as [DeckButton] with `.enabled`),
 // `deck_dim` (staleness/gate opacity), `deck_speed_badge` (Text, `--`
-// when unknown), and `deck_closed_caption` (PotPlayer not found).
+// when unknown), `deck_closed_caption` (PotPlayer not found),
+// `deck_volume_button` / `deck_settings_button` (header), and the
+// `ruler_*` keys on the bottom ruler.
 
 import 'dart:async';
 
@@ -27,18 +32,22 @@ import '../hud/scrub_speed_hud.dart';
 import '../tracks/audio_sub_modal.dart';
 import 'deck_actions.dart';
 import 'deck_controller.dart';
+import 'deck_header_row.dart';
 import 'deck_secondary_rows.dart';
 import 'deck_step_selector.dart';
 import 'deck_transport_row.dart';
-import 'deck_volume_control.dart';
+import 'ruler/ruler_seek_slider.dart';
 
 export 'deck_actions.dart';
 export 'deck_button.dart';
 export 'deck_controller.dart';
+export 'deck_header_row.dart';
 export 'deck_secondary_rows.dart';
 export 'deck_step_selector.dart';
 export 'deck_transport_row.dart';
 export 'deck_volume_control.dart';
+export 'ruler/ruler_seek_slider.dart';
+export 'volume_popup.dart';
 
 /// Viewport heights below this never bottom-anchor — they stack from the
 /// top inside a scroll view. 560 covers the worst-case content (reconnect
@@ -133,22 +142,9 @@ class PotPlayerDeck extends ConsumerWidget {
             ),
           ),
         const ScrubSpeedHud(), // Doc 38 header — owns its own h margins
-        Padding(
-          padding: horizontal,
-          child: SizedBox(
-            height: 24,
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                telemetry.fileTitle ?? '',
-                key: const Key('deck_caption'),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppTypography.label
-                    .copyWith(color: AppColors.textTertiary),
-              ),
-            ),
-          ),
+        DeckHeaderRow(
+          fileTitle: telemetry.fileTitle ?? '',
+          volumeEnabled: wsUp && running,
         ),
         const Spacer(), // anchors the cluster in the lower half
         Opacity(
@@ -182,7 +178,9 @@ class PotPlayerDeck extends ConsumerWidget {
               const SizedBox(height: 10),
               const DeckStepSelector(),
               const SizedBox(height: 10),
-              DeckVolumeControl(enabled: wsUp && running),
+              // Bottom of the deck: the speed-sensing ruler scrubber
+              // (round 5) — the volume row moved into the header popup.
+              RulerSeekSlider(enabled: wsUp && running),
             ],
           ),
         ),

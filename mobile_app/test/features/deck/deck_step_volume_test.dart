@@ -279,6 +279,9 @@ void main() {
       (WidgetTester tester) async {
         push(volume: 42);
         await pumpDeck(tester);
+        // Volume now lives behind the header button's popup.
+        await tester.tap(find.byKey(const Key('deck_volume_button')));
+        await tester.pumpAndSettle(); // popup entrance animation
         expect(sliderValue(tester), 42.0);
         expect(volumeReadout(tester), '42%');
 
@@ -316,33 +319,36 @@ void main() {
       },
     );
 
-    testWidgets('slider disables while WS is down or PotPlayer is closed',
+    testWidgets(
+        'volume button disables while WS is down or PotPlayer is closed',
         (WidgetTester tester) async {
       client.setConnected(false);
       push();
       await pumpDeck(tester);
       expect(
-        tester.widget<Slider>(find.byKey(const Key('deck_volume'))).onChanged,
-        isNull,
-      );
-      expect(
-        tester.widget<Slider>(find.byKey(const Key('deck_volume'))).onChangeEnd,
-        isNull,
+        tester.widget<DeckVolumeButton>(
+          find.byKey(const Key('deck_volume_button')),
+        ).enabled,
+        isFalse,
       );
 
       client.setConnected(true);
       push(potplayerFound: false);
       await tester.pump();
       expect(
-        tester.widget<Slider>(find.byKey(const Key('deck_volume'))).onChanged,
-        isNull,
+        tester.widget<DeckVolumeButton>(
+          find.byKey(const Key('deck_volume_button')),
+        ).enabled,
+        isFalse,
       );
 
-      push(); // PotPlayer back — the slider re-arms
+      push(); // PotPlayer back — the button re-arms
       await tester.pump();
       expect(
-        tester.widget<Slider>(find.byKey(const Key('deck_volume'))).onChanged,
-        isNotNull,
+        tester.widget<DeckVolumeButton>(
+          find.byKey(const Key('deck_volume_button')),
+        ).enabled,
+        isTrue,
       );
     });
   });

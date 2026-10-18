@@ -528,18 +528,20 @@ def test_potplayer_adapter_payloads_and_failures(wired) -> None:
     }
     dispatcher.fail_detail = None
 
-    # SEEK_DELTA adds the Doc 10 snapshot position to the delta.
+    # SEEK_DELTA chains off the freshest app-side base: an absolute SEEK
+    # recorded moments ago outranks the snapshot (the snapshot may predate
+    # the seek — round-5 ruler/tap commits must not snap back).
     wired.record.poller.latest = SimpleNamespace(
         position_ms=1_000, duration_ms=10_000, is_playing=True, speed=1.25
     )
     reply = _dispatch(router, "CMD_POTPLAYER", "SEEK_DELTA", {"delta_ms": 500})
-    assert dispatcher.calls[-1] == ("seek_ms", 1_500)
+    assert dispatcher.calls[-1] == ("seek_ms", 12_845)  # 12_345 (SEEK base) + 500
     assert dispatcher.speed_provider() == 1.25
 
     # Back-to-back taps chain off the previous delta target, NOT the (stale)
     # snapshot — rapid-tap regression (user: "starts again where we start tapping").
     reply = _dispatch(router, "CMD_POTPLAYER", "SEEK_DELTA", {"delta_ms": 500})
-    assert dispatcher.calls[-1] == ("seek_ms", 2_000)
+    assert dispatcher.calls[-1] == ("seek_ms", 13_345)
     assert reply["payload"] == {"ok": True}
 
 
