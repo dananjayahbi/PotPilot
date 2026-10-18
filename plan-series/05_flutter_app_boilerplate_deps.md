@@ -10,7 +10,7 @@ Scaffolds the `mobile_app/` Flutter project (Android-first bedroom remote) and i
 
 > **Round-6 amendment (2026-10-18):**
 > - **Bed Mode tab removed** — the shell now has **3 tabs**: `AppTab { deck, trackpad, library }` with `kStartupTabIds = ['deck','trackpad','library']` (Doc 34). Every "4-destination" / `bedMode` / `_BedModePlaceholder` statement below is the original Wave 1.A shape, **deprecated in round 6 (2026-10-18)**; the replacement feature is the trackpad keyboard trigger zone ([37_flutter_full_pc_keyboard_sheet.md](37_flutter_full_pc_keyboard_sheet.md) §11).
-> - **Dependency set** — the "frozen six" runtime deps gained a 7th in round 6: `screen_brightness: ^2.1.11` (§6.1; application-window brightness only, **no Android permission**), used by the DISPLAY settings card and re-applied at startup in `main()`.
+> - **Dependency set** — the "frozen six" runtime deps gained a 7th in round 6: `screen_brightness: ^2.1.11` (§6.1; application-window brightness only, **no Android permission**), used by the DISPLAY settings card and re-applied at startup in `main()`. **(Removed in round 7, 2026-10-18 — the OS now owns screen brightness; the app no longer manages it, so the runtime set is back to the frozen six.)**
 
 **Out of scope:** OLED theme tokens ([29_flutter_oled_theme_design_system.md](29_flutter_oled_theme_design_system.md) — this doc only reserves the `ThemeData` injection point), all networking (Docs 30–34), all feature surfaces (Docs 35–45), hardware hooks (Docs 43–44), final tab wiring and `flutter build apk` (Session 3), iOS targets (§10).
 
@@ -123,7 +123,7 @@ Runtime request timing: CAMERA at scanner open (Doc 32); READ_PHONE_STATE at fir
 | `phone_state` | `^1.3.0` | Android telephony state stream (Doc 44) |
 | `vibration` | `^2.0.0` | Haptic patterns (Doc 42) |
 | `shared_preferences` | `^2.2.0` | Paired-PC cache, tokens, settings (Doc 34) |
-| `screen_brightness` | `^2.1.11` | **(round 6, 2026-10-18)** Controller app-window brightness (Doc 34 key `pp.display.brightness`, `DisplaySettingsCard` slider key `settings_brightness`) — application mode only, **no Android permission**; applied at startup in `main()` |
+| `screen_brightness` | `^2.1.11` | **(round 6, 2026-10-18 — row historical; removed in round 7, 2026-10-18 — the OS now owns screen brightness, package no longer in `pubspec.yaml`)** Controller app-window brightness (Doc 34 key `pp.display.brightness`, `DisplaySettingsCard` slider key `settings_brightness`) — application mode only, **no Android permission**; applied at startup in `main()` |
 
 Environment: `sdk: ">=3.5.0 <4.0.0"`, `flutter: ">=3.5.0"` (Flutter 3.x per overview; exact SDK pinned at scaffold). Dev: `flutter_test` (SDK), `flutter_lints: ^4.0.0`, `build_runner` **not** introduced (no codegen needed in Wave 1.A).
 **Internal docs:** [01_monorepo_structure.md](01_monorepo_structure.md) (lint contract §4.5) · [02_binary_udp_protocol_spec.md](02_binary_udp_protocol_spec.md) · [03_websocket_json_schema_spec.md](03_websocket_json_schema_spec.md) · [29_flutter_oled_theme_design_system.md](29_flutter_oled_theme_design_system.md) · [30_flutter_udp_datagram_sender.md](30_flutter_udp_datagram_sender.md) · [31_flutter_websocket_client_reconnect.md](31_flutter_websocket_client_reconnect.md) · [32_flutter_qr_scanner_mdns_pairing.md](32_flutter_qr_scanner_mdns_pairing.md) · [33_flutter_telemetry_state_provider.md](33_flutter_telemetry_state_provider.md) · [34_flutter_local_storage_connection_cache.md](34_flutter_local_storage_connection_cache.md) · [35](35_flutter_120hz_virtual_trackpad.md)/[36](36_flutter_custom_potplayer_deck_ui.md)/[41](41_flutter_blind_bed_mode_gestures.md)/[45](45_flutter_in_app_movie_library_browser.md) (tab bodies).
@@ -140,7 +140,7 @@ Environment: `sdk: ">=3.5.0 <4.0.0"`, `flutter: ">=3.5.0"` (Flutter 3.x per over
 - **Hot-restart vs pairing state** → no persistent side effects in shell construction; all connection state lives in Riverpod (Doc 33/34).
 
 ## 8. Acceptance Criteria
-- [ ] `flutter pub get` resolves with the §6.1 packages (**seven** since round 6, 2026-10-18 — `screen_brightness` added; originally six); `pubspec.yaml` contains no other runtime deps.
+- [ ] `flutter pub get` resolves with the §6.1 packages (six frozen; **seven only during round 6, 2026-10-18 — `screen_brightness` removed in round 7, 2026-10-18 — the OS now owns screen brightness, back to six**); `pubspec.yaml` contains no other runtime deps.
 - [ ] `flutter analyze` exits 0 with Doc 01 lint overrides active.
 - [ ] `flutter test` green: shell shows 4 destinations in order *(3 destinations since round 6, 2026-10-18 — Bed Mode removed)*, `IndexedStack` retains counter/state across tab switches, back-press pops to deck then exits.
 - [ ] Manifest contains exactly the six §5.2 permissions; `minSdkVersion` ≥ 21.

@@ -1,14 +1,34 @@
 # potpilot_agent.spec — PotPilot PC agent build spec (Doc 27).
 #
-# Build (from pc_agent/):  pyinstaller --noconfirm installer/potpilot_agent.spec
+# Build (from pc_agent/, ALWAYS with the project venv python):
+#   ..\.venv\Scripts\python.exe -m PyInstaller --noconfirm installer/potpilot_agent.spec
+# Run from pc_agent/: PyInstaller's default distpath is CWD-relative, so this
+# lands in pc_agent/dist (where setup.iss expects it) — and the venv
+# interpreter is mandatory: a PATH `python` that is not the venv silently
+# drops runtime-only deps (qrcode etc.) out of the bundle and the agent
+# crashes at startup with ModuleNotFoundError (round-7 incident).
 # Output (onedir, canonical): dist/PotPilotAgent/PotPilotAgent.exe
 # Topology flips through the ONEFILE knob below (onedir ships; onefile is the
-# portable-copy experiment).  All paths anchor on SPECPATH so the command is
-# cwd-independent (Doc 27 §4.1).
+# portable-copy experiment).  All paths anchor on SPECPATH so the spec is
+# source-path-correct regardless of cwd (Doc 27 §4.1).
 
+import sys as _sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files
+
+# Fail fast when built under the wrong interpreter (the guard above made
+# concrete): these must import HERE or the shipped agent will not start.
+for _dep in ("qrcode", "customtkinter", "websockets", "PIL", "zeroconf"):
+    try:
+        __import__(_dep)
+    except ImportError as _exc:
+        raise SystemExit(
+            f"Missing dependency {_dep!r} in {_sys.executable!r}.\n"
+            "Build with the project venv instead (from pc_agent/):\n"
+            "  ..\\.venv\\Scripts\\python.exe -m PyInstaller "
+            "--noconfirm installer/potpilot_agent.spec"
+        ) from _exc
 
 ONEFILE: bool = False
 APP_NAME: str = "PotPilotAgent"

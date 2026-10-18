@@ -87,7 +87,7 @@ async def start_udp_server(*, auth: "AuthMiddleware", mouse: MouseEngine, scrub_
    4. Sequence: `tracker.accept(peer, seq)` → drop increments `seq_drops`.
    5. Dispatch by `ptype` (table §5); `bad_args` drops invalid button ids/states.
 3. **Sequence algorithm** — per `(ip, port)` peer: first packet accepted; afterwards `delta = (seq - last) & 0xFFFF`; accept iff `1 <= delta <= 0x7FFF`, then store `seq`. This drops duplicates and out-of-order packets while surviving the uint16 wrap at 65535→0.
-4. **Scrub reconstruction** — `target_s = ((arg1 & 0xFFFF) << 16) | (arg2 & 0xFFFF)`; reject `> 86_400` (24 h sanity cap); call `scrub_sink(target_s)` (wired by `main.py` to Doc 09's seek handler). Missing sink → drop with warning counter (graceful partial startup).
+4. **Scrub reconstruction** — `target_s = ((arg1 & 0xFFFF) << 16) | (arg2 & 0xFFFF)`; reject `> 86_400` (24 h sanity cap); call `scrub_sink(target_s)` (wired by `main.py` to Doc 09's seek handler). **(Round 7, 2026-10-18: the sink now routes through `seek_queue.absolute(target_s * 1000)` — flushes pending deltas first, dispatches immediately, rebases the chain; see the Doc 09 §5 amendment.)** Missing sink → drop with warning counter (graceful partial startup).
 5. **Peer bookkeeping** — on each accepted packet touch `last_seen`; `prune()` evicts peers idle `> PEER_TIMEOUT_S` and caps the table at `MAX_PEERS` (oldest first).
 6. **Shutdown** — `transport.close()`, clear peer table; `stats` remain readable for the dashboard.
 
@@ -156,6 +156,7 @@ Frozen wire contract (authority: [02_binary_udp_protocol_spec.md](02_binary_udp_
 - **Packet flood** — 1 MiB `SO_RCVBUF` + synchronous dispatch absorbs 120 Hz bursts; kernel overruns are covered by sequence-drop logic.
 - **Scrub sink not yet wired** — packets drop with a single aggregated warning; mouse path unaffected (staged startup).
 - **Scrub seconds > 24 h** — rejected as corrupt (`bad_args`).
+- **Scrub arrives while a delta burst is coalescing (round 7, 2026-10-18)** — `seek_queue.absolute()` flushes the pending deltas first, then dispatches: request order is preserved and the chain rebases to the scrub target (Doc 09 §5).
 
 ## 8. Acceptance Criteria
 

@@ -31,6 +31,7 @@ and a non-blocking asyncio hot path.
 
 **Creates (create-only):**
 - `pc_agent/potplayer/wm_dispatcher.py`
+- `pc_agent/potplayer/seek_queue.py` — **(round 7, 2026-10-18)** PC-side seek request queue `SeekQueue`; composes `pc_agent/potplayer/seek_base.py`'s `SeekBaseTracker` (added round 3, window `COALESCE_WINDOW_S = 1.5` s + new `invalidate()`); routing in §5 round-7 amendment.
 - `shared_specs/potplayer_wm_codes.json` — **source of truth** for all PotPlayer Win32 message IDs
   (Docs 09 & 10 read it; nobody else writes it).
 
@@ -176,6 +177,8 @@ generic `dispatch`); a missing entry yields `unknown_command` — never a wire-s
 UDP `0x04` (`arg1 = sec_high`, `arg2 = sec_low`) → `seek_ms((sec_high << 16) | (sec_low & 0xFFFF) * 1000)`
 is assembled by Doc 13 and passed here as milliseconds.
 
+> **Round-7 amendment (2026-10-18) — seek routing via `SeekQueue`** (`pc_agent/potplayer/seek_queue.py`, wired by `main.py`): the `SEEK`/`SEEK_DELTA` rows above no longer run bare router arithmetic. `main.py` exposes a module-global `seek_queue` (test seam) and routes `SEEK` → `seek_queue.absolute(position_ms)`, `SEEK_DELTA` → `seek_queue.delta(delta_ms)` (the ≥ 0 clamp moved inside the queue), the Doc 13 UDP `0x04` scrub sink → `seek_queue.absolute(target_s * 1000)`, and `FRAME_STEP` → `seek_queue.flush()` before dispatch + `seek_queue.note_external_move()` after `ok`. Semantics: deltas chain from the last *pending* target while a burst is open (never the stale 250 ms poll + ~500 ms position-chunk snapshot mid-chain); the first delta of a burst dispatches immediately (leading edge, zero latency), further deltas within `BURST_COALESCE_MS = 150` ms accumulate and one trailing timer dispatches a single final seek (signals cannot mix, no seek thrash; 150 ms > phone 80 ms per-action debounce + RTT, < human deliberate tap spacing ~250 ms); absolute requests flush pending deltas first (request order preserved), dispatch immediately, and rebase the `SeekBaseTracker` chain (`seek_base.py` — `invalidate()` new, `COALESCE_WINDOW_S = 1.5` s unchanged); `flush()` is the test/shutdown seam (no scheduler or closed event loop → synchronous delivery, never loses a request; dispatch failures never recorded as chain truth; targets clamp at 0). **Why (root causes, not network delay — seeks were already serialized on the single asyncio loop):** (i) chain base falling back to a stale telemetry snapshot at burst starts / chain expiry, (ii) absolute scrubs computed from lagging telemetry rebasing the chain backwards, (iii) frame steps invisible to the chain — the queue fixes all three and coalesces bursts into one final seek. Unit tests: `pc_agent/tests/test_seek_queue.py` (12); `test_wiring.py`'s chain block now flushes before asserting the final target (`13_345`). Full round log: progress.md Round-7 row; deck-side summary in [36_flutter_custom_potplayer_deck_ui.md](36_flutter_custom_potplayer_deck_ui.md) §13.
+
 **`shared_specs/potplayer_wm_codes.json` — schema defined by this doc** (seed excerpt; every entry
 ships with `status: "capture_required"` until live-captured per §9):
 
@@ -269,6 +272,7 @@ table; optional speed provider), [13_pc_asyncio_udp_receiver.md](13_pc_asyncio_u
 - `test_corrupt_json_raises_at_init` and `test_reload_keeps_old_table_on_error`.
 - `test_needs_ack_timeout` — mocked `SendMessageTimeoutW` returns 0 → `timeout` within budget.
 - `test_no_focus_apis` — source guard: no `SetForegroundWindow`/`ShowWindow`/`SetCapture`.
+- **Round 7, 2026-10-18 — `pc_agent/tests/test_seek_queue.py` (12 tests):** `SeekQueue` burst semantics — leading-edge dispatch, trailing coalesce into one final seek, stale snapshot never used mid-chain, quiet-window immediacy, absolute flush-then-rebase, frame-step invalidation, failed dispatch not recorded as chain truth, clamp, synchronous fallback (no scheduler / closed loop).
 
 **Manual (real PotPlayer 64-bit, IDs captured per §4.1 note):**
 1. Spy++/WinSpy capture session (see §10 A1) fills the JSON; verify each command live: play/pause

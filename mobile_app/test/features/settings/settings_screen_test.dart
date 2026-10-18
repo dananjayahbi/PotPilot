@@ -43,37 +43,6 @@ void main() {
     expect(find.text('1.00\u00d7'), findsOneWidget);
   });
 
-  testWidgets('DISPLAY card renders; drag previews the badge, release '
-      'persists the saved brightness', (WidgetTester tester) async {
-    await pumpSettings(tester);
-    expect(find.text('DISPLAY'), findsOneWidget);
-    expect(find.text('Screen brightness'), findsOneWidget);
-    expect(
-      tester.widget<Slider>(find.byKey(const Key('settings_brightness'))).value,
-      1.0,
-    );
-    expect(find.text('100%'), findsOneWidget);
-    expect(ConnectionCache.instance.brightness, 1.0);
-
-    final Slider slider =
-        tester.widget<Slider>(find.byKey(const Key('settings_brightness')));
-    slider.onChanged!(0.4);
-    await tester.pump();
-    expect(find.text('40%'), findsOneWidget);
-    expect(ConnectionCache.instance.brightness, 1.0); // preview only
-
-    slider.onChangeEnd!(0.4);
-    await tester.pump();
-    expect(ConnectionCache.instance.brightness, 0.4);
-
-    // Re-open: the saved value is what the card restores.
-    await pumpSettings(tester);
-    expect(
-      tester.widget<Slider>(find.byKey(const Key('settings_brightness'))).value,
-      0.4,
-    );
-  });
-
   testWidgets('slider preview updates the badge; release persists the profile',
       (WidgetTester tester) async {
     await pumpSettings(tester);

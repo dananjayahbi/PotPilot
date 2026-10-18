@@ -74,10 +74,8 @@ void main() {
       expect(() => cache.activeHost, throwsStateError);
       expect(() => cache.trackpadProfile, throwsStateError);
       expect(() => cache.startupTab, throwsStateError);
-      expect(() => cache.brightness, throwsStateError);
       expect(() => cache.saveHost(host('PC')), throwsStateError);
       expect(() => cache.saveStartupTab('deck'), throwsStateError);
-      expect(() => cache.saveBrightness(0.5), throwsStateError);
       expect(() => cache.clearAll(), throwsStateError);
 
       // Restore a healthy store for the remaining tests.
@@ -134,11 +132,6 @@ void main() {
         ),
       );
       expect(fresh.startupTab, 'library');
-      expect(fresh.brightness, 1.0); // default until saved
-      await cache.saveBrightness(0.35);
-      final ConnectionCache bright = ConnectionCache.forTest();
-      await bright.init();
-      expect(bright.brightness, 0.35); // round-6 display value survives
     });
 
     test('token round-trips byte-identically', () async {
@@ -466,45 +459,6 @@ void main() {
         ),
       );
       expect(fresh.startupTab, 'library');
-    });
-  });
-
-  group('brightness (round-6 DISPLAY)', () {
-    test('defaults to 1.0; out-of-range and garbage fall back to 1.0',
-        () async {
-      await cache.init();
-      expect(cache.brightness, 1.0);
-
-      expect(() => cache.saveBrightness(0.0), throwsArgumentError);
-      expect(() => cache.saveBrightness(1.01), throwsArgumentError);
-      expect(() => cache.saveBrightness(0.04), throwsArgumentError);
-
-      SharedPreferences.setMockInitialValues(<String, Object>{
-        'pp.display.brightness': 'not-a-number',
-      });
-      final ConnectionCache garbage = ConnectionCache.forTest();
-      await garbage.init();
-      expect(garbage.brightness, 1.0);
-
-      SharedPreferences.setMockInitialValues(<String, Object>{
-        'pp.display.brightness': '7.5', // above range
-      });
-      final ConnectionCache high = ConnectionCache.forTest();
-      await high.init();
-      expect(high.brightness, 1.0);
-    });
-
-    test('save writes the pp.* key and pre-init save throws', () async {
-      await cache.init();
-      await cache.saveBrightness(0.6);
-      final SharedPreferences prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString('pp.display.brightness'), '0.600');
-      expect(cache.brightness, 0.6);
-
-      // The pre-init guard group covers saveBrightness via the shared
-      // StateError contract; verify clearAll restores the default too.
-      await cache.clearAll();
-      expect(cache.brightness, 1.0);
     });
   });
 

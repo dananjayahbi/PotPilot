@@ -187,7 +187,7 @@ Reproduces every milestone of overview Section 7; the suite is only "green" when
 **Automated (paths from §2)**
 - `test_serialization_overhead.py` — asserts **M1**; validates round-trip byte-equality against `udp_packet_layout.json`.
 - `test_udp_latency_benchmark.py` — orchestrates device bench (§4.4), asserts **M2/M8**; skips cleanly without a device; runs **M9** locally always.
-- `test_ws_dispatch_and_telemetry.py` — against agent + mock window: asserts **M3/M4/M5/M6** and envelope schema conformance of every action listed in §5.
+- `test_ws_dispatch_and_telemetry.py` — against agent + mock window: asserts **M3/M4/M5/M6** and envelope schema conformance of every action listed in §5. *(Round 7, 2026-10-18: its §8 file-presence checklist entry for Wave 2.B now points at `mobile_app/lib/features/trackpad/keyboard_trigger_overlay.dart` — the previous `bed_mode/blind_gesture_pad.dart` was deleted in round 6 with the bed-mode feature.)*
 - `mobile_app/integration_test/udp_latency_bench_test.dart` — produces `BENCH_RESULT` JSON (p50/p95/p99/mean/max + count) for pytest.
 - `mobile_app/integration_test/wiring_smoke_test.dart` — cold app start → pairing from cached host (Doc 34) → telemetry frame received within 2 s → root tabs (Deck/Bed/Trackpad/Library) all render.
 

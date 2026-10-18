@@ -111,7 +111,7 @@ Compliance rules (no wire impact — the theme is presentation-only):
 
 ## 6. Dependencies & Integration Points
 
-**Internal:** [05_flutter_app_boilerplate_deps.md](05_flutter_app_boilerplate_deps.md) (`pubspec.yaml`, no extra packages — catalog now 7 incl. round-6 `screen_brightness`, 2026-10-18), [33_flutter_telemetry_state_provider.md](33_flutter_telemetry_state_provider.md) (state → token mapping), [35](35_flutter_120hz_virtual_trackpad.md)/[36](36_flutter_custom_potplayer_deck_ui.md)/[38](38_flutter_live_scrub_bar_speed_hud.md)/[41](41_flutter_blind_bed_mode_gestures.md)/[45](45_flutter_in_app_movie_library_browser.md) (token consumers), [42_flutter_haptic_feedback_engine.md](42_flutter_haptic_feedback_engine.md) (shares `AppMotion` durations optionally).
+**Internal:** [05_flutter_app_boilerplate_deps.md](05_flutter_app_boilerplate_deps.md) (`pubspec.yaml`, no extra packages — catalog was 7 in round 6 incl. round-6 `screen_brightness`; **back to 6 after the round-7 removal, 2026-10-18 — the OS now owns screen brightness**), [33_flutter_telemetry_state_provider.md](33_flutter_telemetry_state_provider.md) (state → token mapping), [35](35_flutter_120hz_virtual_trackpad.md)/[36](36_flutter_custom_potplayer_deck_ui.md)/[38](38_flutter_live_scrub_bar_speed_hud.md)/[41](41_flutter_blind_bed_mode_gestures.md)/[45](45_flutter_in_app_movie_library_browser.md) (token consumers), [42_flutter_haptic_feedback_engine.md](42_flutter_haptic_feedback_engine.md) (shares `AppMotion` durations optionally).
 
 **External:** Flutter 3.x SDK — `dart:ui` (`Color`), `package:flutter/material.dart` (`ThemeData`, `ColorScheme`, `TextTheme`, component theme data classes); `package:flutter/services.dart` (`SystemUiOverlayStyle`). No pub dependencies added.
 

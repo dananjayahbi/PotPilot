@@ -117,7 +117,7 @@ Consumed/produced envelope (frozen; authority [03_websocket_json_schema_spec.md]
 
 | `type` | Example `action` tokens | Handler domain |
 |---|---|---|
-| `CMD_POTPLAYER` | `PLAY_PAUSE`, `SET_SPEED`, `CYCLE_SUBS`, frame-step/seek/aspect | [09](09_potplayer_wm_command_dispatcher.md) `wm_dispatcher` |
+| `CMD_POTPLAYER` | `PLAY_PAUSE`, `SET_SPEED`, `CYCLE_SUBS`, frame-step/seek/aspect | [09](09_potplayer_wm_command_dispatcher.md) `wm_dispatcher` *(round 7, 2026-10-18: seek actions go through `main.py`'s module-global `seek_queue` first — see the Doc 09 §5 amendment)* |
 | `CMD_KEY` | VK combos / Unicode text forward | [07](07_win32_sendinput_keyboard_engine.md) |
 | `CMD_MEDIA` | `LIST_MEDIA`, `RESCAN_MEDIA`, `LAUNCH_MEDIA` | [20](20_pc_local_media_scanner_service.md), [21](21_pc_potplayer_file_launcher.md) |
 | `CMD_SYSTEM` | `SET_BLACKOUT`, `SNAP_TO_PRIMARY_MONITOR`, `SET_BRIGHTNESS`, sleep timer, `SET_SYSTEM_VOLUME`/`SET_SYSTEM_MUTE` | [11](11_multi_monitor_window_snapper.md) [12](12_secondary_monitor_blackout_overlay.md) [19](19_pc_ddcci_monitor_brightness.md) [22](22_pc_sleep_timer_power_manager.md) [23](23_pc_windows_audio_endpoint_control.md) |

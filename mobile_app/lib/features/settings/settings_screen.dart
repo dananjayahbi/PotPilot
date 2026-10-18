@@ -5,14 +5,13 @@
 // write-through `saveTrackpadProfile`; the trackpad re-resolves the
 // profile on every pointer-down, so changes apply on the next touch.
 // No new persistence keys (Doc 34 owns `pp.trackpad.profile.v1`).
-// Round 6 adds the DISPLAY brightness card
-// ([DisplaySettingsCard], `pp.display.brightness`).
+// (Round 7, 2026-10-18: the round-6 DISPLAY brightness card was removed
+// entirely — the OS/system owns screen brightness.)
 
 import 'package:flutter/material.dart';
 
 import '../../core/storage/connection_cache.dart';
 import '../../core/theme/oled_theme.dart';
-import 'display_settings_card.dart';
 
 /// Pushed from the deck header gear and the library app-bar gear.
 class SettingsScreen extends StatefulWidget {
@@ -125,8 +124,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
           ),
-          const SizedBox(height: 16),
-          const DisplaySettingsCard(),
         ],
       ),
     );

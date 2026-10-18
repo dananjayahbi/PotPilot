@@ -4,7 +4,7 @@
 
 ## 1. Purpose & Scope
 
-Configures `pc_agent/installer/potpilot_agent.spec` so a single command — `pyinstaller --noconfirm installer/potpilot_agent.spec` run from `pc_agent/` — produces the console-free agent bundle at `dist/PotPilotAgent/PotPilotAgent.exe` (onedir; an opt-in onefile switch is included). The spec bundles CustomTkinter's asset tree, the tray/GUI icon files, and declares the hidden `pywin32`/`pystray` imports that static analysis misses, so the installed app runs with `--noconsole` semantics (no black console window).
+Configures `pc_agent/installer/potpilot_agent.spec` so a single command — `..\.venv\Scripts\python.exe -m PyInstaller --noconfirm installer/potpilot_agent.spec` run from `pc_agent/` — produces the console-free agent bundle at `dist/PotPilotAgent/PotPilotAgent.exe` (onedir; an opt-in onefile switch is included). The spec bundles CustomTkinter's asset tree, the tray/GUI icon files, and declares the hidden `pywin32`/`pystray` imports that static analysis misses, so the installed app runs with `--noconsole` semantics (no black console window).
 
 Delivered:
 - Complete spec: `Analysis → PYZ → EXE → (COLLECT | onefile)` with `console=False`.
@@ -42,7 +42,8 @@ def data_files() -> list[tuple]      # collect_data_files("customtkinter") + ico
 ```
 
 Build interface:
-- Command: `pyinstaller --noconfirm installer/potpilot_agent.spec` (cwd = `pc_agent/`).
+- Command: `..\.venv\Scripts\python.exe -m PyInstaller --noconfirm installer/potpilot_agent.spec` (cwd = `pc_agent/`).
+- Interpreter rule (round 7, 2026-10-18): the venv interpreter is **mandatory** — a PATH `python` that is not the venv lacks runtime-only packages (e.g. `qrcode`), which PyInstaller silently omits from the bundle and the agent then crashes at startup with `ModuleNotFoundError` (build ran under `C:\Python314\python.exe`; `main.py` → `qr_payload_gen` import chain). The spec now fail-fasts at build time if a required dependency is missing from the build interpreter.
 - Outputs: `dist/PotPilotAgent/PotPilotAgent.exe` (+ `_internal/` payload in onedir mode) or `dist/PotPilotAgent.exe` in onefile mode.
 - Behavior flags fixed by the spec: `console=False`, `upx=False`, `strip=False`, windowed subsystem (no console allocation at all).
 
@@ -58,7 +59,7 @@ Build interface:
 
 Build procedure (repeatable release path):
 1. Activate the Doc 04 venv (`pc_agent/.venv`) with all `requirements.txt` packages installed.
-2. From `pc_agent/`, run `pyinstaller --noconfirm installer/potpilot_agent.spec`.
+2. From `pc_agent/`, run `..\.venv\Scripts\python.exe -m PyInstaller --noconfirm installer/potpilot_agent.spec` (never bare `pyinstaller`/`python` — see the interpreter rule in §3; the default distpath is cwd-relative, so cwd must be `pc_agent/`).
 3. Wait for `Building COLLECT ... completed successfully.` in the log.
 4. Run the smoke checklist in §8/§9 against `dist/PotPilotAgent/`.
 5. Hand `dist/PotPilotAgent/` to the Doc 28 installer build (`SourceDir` default points exactly there).
@@ -158,7 +159,7 @@ Bundle hygiene rules:
 
 ## 8. Acceptance Criteria
 
-- [ ] `pyinstaller --noconfirm installer/potpilot_agent.spec` exits 0 from `pc_agent/` and yields `dist/PotPilotAgent/PotPilotAgent.exe`.
+- [ ] `..\.venv\Scripts\python.exe -m PyInstaller --noconfirm installer/potpilot_agent.spec` exits 0 from `pc_agent/` and yields `dist/PotPilotAgent/PotPilotAgent.exe`.
 - [ ] Launching the exe opens **no console window**; tray icon + dashboard appear (Docs 24/25 functional inside the bundle).
 - [ ] `_internal/customtkinter/` assets present; QR panel renders; tray icon file resolves.
 - [ ] `win32gui.FindWindow` path works: background `WM_COMMAND` reaches PotPlayer from the frozen exe (Doc 09 manual check).

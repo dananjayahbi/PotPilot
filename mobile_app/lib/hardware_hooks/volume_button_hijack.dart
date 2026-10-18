@@ -206,6 +206,12 @@ class VolumeButtonHijack with WidgetsBindingObserver {
   LogicalKeyboardKey? _heldKey;
   int _direction = 1;
   int _repeatIndex = 0;
+
+  /// Hold-repeat seek anchor (round 7). Captured on the first successful scrub
+  /// of a hold and reused for every later repeat: re-reading the live position
+  /// mid-hold mixed fresh telemetry with the repeat index and made targets
+  /// skip backwards/forwards ("goes here and there").
+  int? _seekAnchorSec;
   Timer? _holdTimer;
   Timer? _hudTimer;
 
@@ -338,6 +344,7 @@ class VolumeButtonHijack with WidgetsBindingObserver {
     _direction = key == LogicalKeyboardKey.audioVolumeUp ? 1 : -1;
     _heldKey = key;
     _repeatIndex = 0;
+    _seekAnchorSec = null;
     _phase = VolumeHijackPhase.volumeStep;
     _holdTimer?.cancel();
     _holdTimer = Timer(_settings.holdThreshold, _onHoldThreshold);
@@ -375,6 +382,7 @@ class VolumeButtonHijack with WidgetsBindingObserver {
     _phase = VolumeHijackPhase.idle;
     _heldKey = null;
     _repeatIndex = 0;
+    _seekAnchorSec = null;
     if (_hudValue.value != null) {
       _armHudHide(); // badge lives 700 ms after key release (§8)
     }
@@ -386,6 +394,7 @@ class VolumeButtonHijack with WidgetsBindingObserver {
     _phase = VolumeHijackPhase.idle;
     _heldKey = null;
     _repeatIndex = 0;
+    _seekAnchorSec = null;
     if (clearHud) {
       _hudTimer?.cancel();
       _hudTimer = null;
@@ -445,8 +454,9 @@ class VolumeButtonHijack with WidgetsBindingObserver {
     unawaited(_haptics.play(HapticPattern.volumeTick));
   }
 
-  /// Fires one UDP `0x04` scrub for `position ± seekStep * repeatIndex`,
-  /// clamped to `[0, duration]` (§4.2 step 5). Suppressed — but locally
+  /// Fires one UDP `0x04` scrub for `anchor ± seekStep * repeatIndex`,
+  /// clamped to `[0, duration]` (§4.2 step 5). The anchor is captured once
+  /// per hold (round 7) — see [_seekAnchorSec]. Suppressed — but locally
   /// ticked — while WS is down, UDP is unconfigured, or position data is
   /// stale/absent (§5, §7).
   void _fireScrub() {
@@ -457,8 +467,10 @@ class VolumeButtonHijack with WidgetsBindingObserver {
     if (_wsConnected() && _udp.isReady && fresh) {
       final int positionSec = snapshot.positionMs ~/ 1000;
       final int durationSec = snapshot.durationMs ~/ 1000;
+      final int anchor = _seekAnchorSec ?? positionSec;
+      _seekAnchorSec = anchor; // hold start — telemetry must not re-base it
       final int raw =
-          positionSec + _direction * _settings.seekStepSec * _repeatIndex;
+          anchor + _direction * _settings.seekStepSec * _repeatIndex;
       final int target = raw < 0 ? 0 : (raw > durationSec ? durationSec : raw);
       _hudOffline.value = false;
       _udp.sendScrub(target);

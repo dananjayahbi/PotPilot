@@ -71,7 +71,7 @@ String formatTimecode(int? ms);
 2. **beginDrag:** activated by horizontal drag with vertical hit-slop ±16 dp; captures `dragStartPos = positionMs`, `dragStartTs = now`, freezes displayed position; notifies host (`onScrubActiveChanged(true)`).
 3. **updateDrag:** `fraction = clamp((dragStartPx + dx) / trackWidth, 0, 1)`; `targetMs = (fraction * durationMs).round()`. Preview label updates every frame; **throttle:** stream `UdpSender.sendScrub(targetSeconds)` (floored integer seconds) only when (a) ≥16 ms since last send (≈60 Hz cap) **and** (b) the integer second changed. The PC's Doc 09 `seek_absolute(target_seconds)` applies each packet immediately — that is the visible low-latency scrub.
 4. **Discard telemetry position while Dragging** (volume/speed badges still update — they are not part of the drag).
-5. **endDrag:** send one WS `SEEK {"position_ms": targetMs}` — the frozen Doc 03 commit carrying millisecond precision that UDP seconds cannot; record `commitTs`; state → **Settling**. (The last UDP packet already put PotPlayer within 1 s; `SEEK` snaps it exactly.)
+5. **endDrag:** send one WS `SEEK {"position_ms": targetMs}` — the frozen Doc 03 commit carrying millisecond precision that UDP seconds cannot; record `commitTs`; state → **Settling**. (The last UDP packet already put PotPlayer within 1 s; `SEEK` snaps it exactly.) **(Round 7, 2026-10-18: on a live WS the final floored-seconds UDP bridge packet is no longer sent — a late UDP packet landing after the ms-precision `SEEK` could drag the PC-side `SeekQueue` chain back up to ~1 s (stale-source rebase → jitter). UDP final commit only when WS is DOWN, as the fallback.)**
 6. **Settling:** accept only telemetry frames with `timestamp` newer than the commit frame; when `|snap.positionMs − targetMs| ≤ 1500` → **Idle** (telemetry re-attached). Timeout 750 ms → **Idle** anyway (trust last committed target, log soft warning).
 7. **Cancel:** pointer cancelled (rotation, sheet open) → send the WS `SEEK` commit if the preview drifted ≥1 full second, else just drop to Idle (no packet).
 
@@ -80,7 +80,7 @@ stateDiagram-v2
   [*] --> Idle: first frame / settle done
   Idle --> Dragging: beginDrag (slop 16dp)
   Dragging --> Dragging: updateDrag → throttled UDP 0x04
-  Dragging --> Settling: endDrag → final UDP 0x04
+  Dragging --> Settling: endDrag → final UDP 0x04 *(round 7: UDP only if WS down)*
   Dragging --> Idle: cancelDrag (no drift)
   Settling --> Idle: |telemetry - target| <= 1.5s OR 750ms timeout
   note right of Dragging: phone is source of truth; telemetry position ignored; UDP 0x04 stream
@@ -127,7 +127,7 @@ stateDiagram-v2
 - **Telemetry stale while dragging:** irrelevant — the drag is send-only; dragging continues as long as the UDP socket (Doc 30) is open.
 - **Zero / unknown duration:** track renders as empty rail, labels `--:--:-- / 00:00:00`; gestures ignored (no packets); badges still live.
 - **Duration changes mid-drag** (file switched underneath): current `durationMs` re-read each frame, fraction re-clamped — no out-of-range `SEEK` ever sent (Doc 03 requires `position_ms ≤ duration_ms`).
-- **WS down at release:** the WS `SEEK` commit is dropped; the last UDP `0x04` packet (≤16 ms old, within 1 s of the preview) stands as the best-effort commit; UI still enters Settling and times out to Idle after 750 ms. If the UDP socket is also dead, the drag is display-only.
+- **WS down at release:** the WS `SEEK` commit is dropped; the last UDP `0x04` packet (≤16 ms old, within 1 s of the preview) stands as the best-effort commit; UI still enters Settling and times out to Idle after 750 ms. If the UDP socket is also dead, the drag is display-only. **(Round 7, 2026-10-18: `endDrag` now explicitly sends one final floored-seconds UDP `0x04` in this WS-down case — UDP is the fallback commit; on a live WS no final UDP packet is sent at all.)**
 - **Commit overshoot:** target clamped to `[0, duration − 500 ms]` so a right-edge throw never seeks past EOF (PotPlayer stop behavior avoided).
 - **Out-of-order telemetry:** Doc 33's monotonic `timestamp` guard drops regressing frames; Settling additionally ignores frames older than the commit.
 - **Rotation / sheet overlay mid-drag:** `cancelDrag` path (§4.7) — no stuck thumb, host notified `false`.

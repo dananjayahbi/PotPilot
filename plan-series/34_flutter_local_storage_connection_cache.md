@@ -39,7 +39,7 @@ abstract final class CacheKeys {
   static const String activeHostId = 'pp.active_host_id';
   static const String trackpadProfileV1 = 'pp.trackpad.profile.v1';
   static const String startupTab = 'pp.startup_tab';
-  static const String brightness = 'pp.display.brightness'; // round 6, 2026-10-18
+  // static const String brightness = 'pp.display.brightness'; // round 6, 2026-10-18 — removed in round 7, 2026-10-18 (key no longer exists; legacy values in the wild are orphaned pp.* keys, cleared by clearAll)
 }
 
 /// Persisted record of one paired PC (JSON round-trippable, schema v1).
@@ -86,9 +86,9 @@ class ConnectionCache {
   // -- shell --
   String get startupTab;                     // one of kStartupTabIds
   Future<void> saveStartupTab(String tabId); // validated against kStartupTabIds
-  // -- display (round 6, 2026-10-18) --
-  double get brightness;                     // 0.05–1.0, default 1.0
-  Future<void> saveBrightness(double value); // validates 0.05..1.0, 3-decimal write
+  // -- display (round 6, 2026-10-18) — REMOVED in round 7, 2026-10-18: section deleted with the brightness feature (the OS now owns screen brightness) --
+  // double get brightness;                     // 0.05–1.0, default 1.0 (removed in round 7, 2026-10-18)
+  // Future<void> saveBrightness(double value); // validates 0.05..1.0, 3-decimal write (removed in round 7, 2026-10-18)
   Future<void> clearAll();                   // wipe pp.* namespace (un-pair everything)
 }
 
@@ -125,7 +125,7 @@ flowchart LR
 2. `activeHostId` → resolve against loaded hosts; dangling id ⇒ `activeHost = null`.
 3. `trackpadProfileV1` → `TrackpadProfile.fromJson` with **field-level** fallback to `defaults` (missing/garbage field ⇒ default for that field only).
 4. `startupTab` → validated against `kStartupTabIds`; invalid ⇒ `'deck'`.
-5. `brightness` → parsed double, clamped to `0.05..1.0`; missing/garbage/out-of-range ⇒ `1.0` (round 6, 2026-10-18).
+5. `brightness` → parsed double, clamped to `0.05..1.0`; missing/garbage/out-of-range ⇒ `1.0` (round 6, 2026-10-18) — **step removed in round 7, 2026-10-18 (key no longer exists; init runs steps 1–4, then step 6's `isReady = true`).**
 6. `isReady = true`; subsequent calls before `init()` throw `StateError` (fail-fast, not silent-null).
 
 **Migration hook:** `CacheKeys` carry `.v1`; a private `_migrations` map (version→`Future<void> Function(SharedPreferences)`) runs sequentially at init when higher versions appear. Only v1 exists now; the hook keeps future renames one-file changes.
@@ -140,7 +140,7 @@ flowchart LR
 | `pp.active_host_id` | string | id of the active record or `""` |
 | `pp.trackpad.profile.v1` | JSON object | `{"sensitivity":1.0,"accelerationGain":2.0,"accelerationThreshold":0.8,"scrollMultiplier":1.0}` |
 | `pp.startup_tab` | string | one of `deck`, `trackpad`, `library` *(was `bed` pre-round 6 — removed 2026-10-18)* |
-| `pp.display.brightness` | decimal string | `0.05`–`1.0`, 3-decimal fixed (default `1.000`; round 6, 2026-10-18) |
+| `pp.display.brightness` | decimal string | `0.05`–`1.0`, 3-decimal fixed (default `1.000`; round 6, 2026-10-18; **row historical — key removed in round 7, 2026-10-18 — the OS now owns screen brightness; legacy values are orphaned `pp.*` keys cleared by `clearAll`**) |
 
 **Frozen-contract invariants enforced on write:** `udpPort` must equal **50505**, `wsPort` must equal **50506**, `tokenHex` must match `^[0-9a-fA-F]{32}$` and is stored **lowercased** (canonical form per Docs 03/15/17) — violations throw `ArgumentError` at the API boundary (catches misuse by future docs; ports are not user-tunable).
 
@@ -171,7 +171,7 @@ flowchart LR
 - **`ipv4s` growth (DHCP churn):** trimmed to 4 most-recent, newest first — Doc 31/32 always try freshest first.
 - **`saveTrackpadProfile` out-of-range values:** each field validated against its §3 range; violation ⇒ `ArgumentError`; partial UI sliders cannot poison the velocity math.
 - **`saveStartupTab('bogus')`:** rejected against `kStartupTabIds`; persisted garbage from older builds falls back to `'deck'` on load.
-- **`saveBrightness` out of range:** values `< 0.05` or `> 1.0` throw `ArgumentError`; corrupt/`7.5` persisted strings load as `1.0` (round 6, 2026-10-18).
+- **`saveBrightness` out of range:** values `< 0.05` or `> 1.0` throw `ArgumentError`; corrupt/`7.5` persisted strings load as `1.0` (round 6, 2026-10-18) — **case removed in round 7, 2026-10-18 (`saveBrightness` no longer exists; the OS now owns screen brightness).**
 - **`shared_preferences` write failure (disk full/race):** future completes with error; in-memory state already updated so the session continues; retry happens on the next write.
 - **Concurrent writes:** single-isolate by design (Dart UI isolate only); `save*` methods are serialized by the prefs API — no locking needed; documented invariant: no background-isolate writers.
 - **Un-pair / privacy:** `clearAll()` removes exactly the `pp.` namespace (never other app prefs) → all hosts, token, profile, tab reset to defaults.
@@ -187,7 +187,7 @@ flowchart LR
 - [ ] Removing the active host ⇒ `activeHost == null`, `removeHost` future completes, prefs updated.
 - [ ] `trackpadProfile` defaults returned before any save; after `saveTrackpadProfile`, new instance reads the saved values; out-of-range field throws.
 - [ ] Invalid `pp.startup_tab` value loads as `'deck'`; `saveStartupTab('bogus')` throws.
-- [ ] `saveBrightness` rejects `0.0`/`0.04`/`1.01`, round-trips `0.6` as `"0.600"`, and corrupt/`7.5` strings load as `1.0` (round 6, 2026-10-18).
+- [ ] `saveBrightness` rejects `0.0`/`0.04`/`1.01`, round-trips `0.6` as `"0.600"`, and corrupt/`7.5` strings load as `1.0` (round 6, 2026-10-18) — **criterion removed in round 7, 2026-10-18 (brightness feature deleted; the OS now owns screen brightness).**
 - [ ] All accessor calls before `init()` completes throw `StateError` (test with a never-completing prefs mock).
 - [ ] `flutter test` for this file runs with an injected mock `SharedPreferences` — no platform channels.
 
@@ -200,8 +200,8 @@ flowchart LR
   - **LRU cap:** 6 saves ⇒ 5 kept, correct eviction.
   - **IP trim:** 6 IPs saved ⇒ 4 kept, newest first.
   - **Corruption matrix:** hosts = garbage JSON; hosts = JSON with one bad entry + two good; profile = `{"sensitivity":"x"}` ⇒ per-field defaults; tab = `"home"` ⇒ `'deck'`.
-  - **Validation:** bad token, wrong port, out-of-range profile field, unknown tab id, out-of-range brightness each throw `ArgumentError`; uppercase-hex token is accepted and persisted lowercased (canonical).
-  - **Brightness (round 6, 2026-10-18):** `saveBrightness` range edges (`0.0`/`0.04`/`1.01` throw, `0.6` ⇒ `"0.600"`); corrupt/`"7.5"` ⇒ load `1.0`.
+  - **Validation:** bad token, wrong port, out-of-range profile field, unknown tab id each throw `ArgumentError` (out-of-range brightness did too in round 6 — **case removed in round 7, 2026-10-18**); uppercase-hex token is accepted and persisted lowercased (canonical).
+  - **Brightness (round 6, 2026-10-18):** `saveBrightness` range edges (`0.0`/`0.04`/`1.01` throw, `0.6` ⇒ `"0.600"`); corrupt/`"7.5"` ⇒ load `1.0`. **(Test block removed in round 7, 2026-10-18 — deleted with the feature.)**
   - **pre-init guard:** accessors throw `StateError` before `init` completes.
   - **`clearAll`:** after wipe, all getters return empty/defaults; unrelated mock keys survive.
   - **`activeHostId` dangling:** points at removed id ⇒ `activeHost == null` and id cleared on next write.
@@ -211,7 +211,7 @@ flowchart LR
 1. Pair, force-close app, relaunch → auto-connects without rescanning (record + token survived).
 2. Pair a second PC → oldest of 6 evicted after pairing five more; active switches sensibly.
 3. Adjust trackpad sliders (UI from Doc 35 shell), relaunch → feel identical.
-4. Set DISPLAY brightness in settings, force-kill, relaunch → saved value reapplied at startup via `main()` (round 6, 2026-10-18).
+4. Set DISPLAY brightness in settings, force-kill, relaunch → saved value reapplied at startup via `main()` (round 6, 2026-10-18). **(Step removed in round 7, 2026-10-18 — no brightness setting exists anymore; the OS now owns screen brightness.)**
 
 ## 10. Assumptions & Open Questions
 

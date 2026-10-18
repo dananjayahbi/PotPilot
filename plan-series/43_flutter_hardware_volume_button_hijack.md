@@ -81,7 +81,7 @@ stateDiagram-v2
 2. **Gate filter** (any fails → return `false`, letting the system handle the key normally): handler attached; app lifecycle `resumed`; `settings.enabled`; PC paired **or** seek data available; Doc 44 `callActive == false` (during `OFFHOOK` the phone must control *call* volume).
 3. **keyDown** → phase `volumeStep`, start hold timer, compute and apply one absolute volume target immediately (zero-latency first press).
 4. **Short press (keyUp < 600 ms)** → dispatch the absolute-target envelope (§5), fire `volumeTick`, show HUD badge for 700 ms, back to `idle`.
-5. **Held past 600 ms** → phase `seekActive`: compute `targetSec = clamp(telemetry.positionSec + direction * seekStepSec * repeatIndex, 0, durationSec)` and fire UDP `0x04`; every subsequent OS key-repeat advances `repeatIndex` and fires another scrub packet; fire `minuteTick` per tick.
+5. **Held past 600 ms** → phase `seekActive`: compute `targetSec = clamp(telemetry.positionSec + direction * seekStepSec * repeatIndex, 0, durationSec)` and fire UDP `0x04`; every subsequent OS key-repeat advances `repeatIndex` and fires another scrub packet; fire `minuteTick` per tick. **(Round 7, 2026-10-18 — hold anchor: the `telemetry.positionSec` base is read only on the hold's first successful scrub and captured in `_seekAnchorSec`; every repeat computes `raw = anchor + direction * seekStepSec * repeatIndex` (clamped) — the live telemetry position must never re-base mid-hold, since a 250 ms poll update arriving between repeats double-counted the step and skipped ahead ("goes here and there"). `_seekAnchorSec` resets in `_beginHold`/`_release`/`_resetMachine`.)**
 6. **keyUp / detach / lifecycle paused** → reset `repeatIndex`, phase `idle`, clear HUD.
 7. Volume math: `base` = last telemetry `volume` (PotPlayer route) or `sys_volume` (master route) per `potplayer_found`, Doc 34 cache as cold-start fallback; `target = clamp(base ± stepPct, 0, 100)`; at a bound, swallow the step and fire a single `microTick` as "wall" feedback.
 
@@ -148,7 +148,7 @@ stateDiagram-v2
 
 - [ ] With app foregrounded, paired, hijack enabled: pressing hardware Volume Up moves the routed target (telemetry `volume` when PotPlayer found, else `sys_volume`) by exactly `stepPct`, and the phone's own system volume OSD **never** appears.
 - [ ] Target routing: PotPlayer open → `CMD_POTPLAYER SET_VOLUME {percent}` (PotPlayer-internal volume moves); PotPlayer closed (`potplayer_found` false) → `CMD_SYSTEM SET_SYSTEM_VOLUME {percent}` (Windows master moves) — both without any setting toggle.
-- [ ] Holding a volume key ≥ 600 ms enters seek mode; each repeat sends a correct `0x04` packet whose bytes decode per the frozen `<BBhhH>` layout (captured by Doc 46 harness) and seeks ±`seekStepSec` from the telemetry position.
+- [ ] Holding a volume key ≥ 600 ms enters seek mode; each repeat sends a correct `0x04` packet whose bytes decode per the frozen `<BBhhH>` layout (captured by Doc 46 harness) and seeks ±`seekStepSec` from the telemetry position *(round 7, 2026-10-18: from the hold's `_seekAnchorSec` — the telemetry position at the first scrub — never the live position mid-hold)*.
 - [ ] Key release before 600 ms never sends a scrub packet; key release after seek-mode entry stops packets immediately.
 - [ ] During an active phone call, keys adjust the phone's call volume (pass-through) — verified manually.
 - [ ] When app is backgrounded, system volume behaves stock.
@@ -164,6 +164,7 @@ stateDiagram-v2
 - Gate matrix: backgrounded / `callActive` / `enabled=false` / disconnected → handler returns `false` (pass-through) and zero sends.
 - Clamp: at volume 100, Up press → no WS send, `microTick` fired (fake haptic port); base ± step clamped 0–100 for both routes.
 - Direction & accumulation: Down-long-press produces decreasing targets; `repeatIndex` math vs `durationSec` upper clamp.
+- **Round 7, 2026-10-18:** "mid-hold telemetry updates never re-base the seek anchor" — telemetry jumping to 150 s mid-hold still yields `[150, 180, 210]` (anchor 120 s + 30 s × index), not the old `150 + 30×2 = 210`-style skip; anchor resets on `_beginHold`/`_release`/`_resetMachine`.
 
 **Manual (physical device)**
 1. Foreground + paired → volume keys move PotPlayer-internal volume while a video plays; close PotPlayer → same keys move Windows master volume; verify system OSD absent.

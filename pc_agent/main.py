@@ -18,7 +18,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import FrameType
-from typing import Protocol
+from typing import Any, Protocol
 
 if __package__ in (None, ""):  # direct script execution: make the repo root importable
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -81,6 +81,11 @@ class ServiceRegistry:
 
 
 service_registry = ServiceRegistry()
+
+# Active seek queue (round 7 burst coalescing). Module-level like
+# ``service_registry``; also serves as a test seam — wiring tests run
+# ``run_agent`` to completion before dispatching, so they can flush it.
+seek_queue: Any = None
 
 
 def register_service(service: LifecycleService) -> None:
@@ -242,7 +247,6 @@ async def run_agent(argv: list[str] | None = None) -> int:
         import ctypes
         import inspect
         import threading
-        from typing import Any
 
         import customtkinter as ctk
         from PIL import Image
@@ -290,7 +294,7 @@ async def run_agent(argv: list[str] | None = None) -> int:
         )
         from pc_agent.network.ws_server_router import WsRouter, WsServer
         from pc_agent.potplayer.hwnd_locator import PotPlayerLocator
-        from pc_agent.potplayer.seek_base import SeekBaseTracker
+        from pc_agent.potplayer.seek_queue import SeekQueue
         from pc_agent.potplayer.telemetry_poller import TelemetryPoller
         from pc_agent.potplayer.wm_dispatcher import WmDispatcher
 
@@ -439,15 +443,25 @@ async def run_agent(argv: list[str] | None = None) -> int:
             return float(snapshot.speed) if snapshot is not None else 1.0
 
         dispatcher = WmDispatcher(locator, speed_provider=_speed_provider)
-        seek_tracker = SeekBaseTracker()  # rapid-tap SEEK_DELTA chaining
+
+        # Round 7 PC-side seek queue: chained pending base + burst coalescing so
+        # rapid forward/backward signals never mix or thrash the player.
+        global seek_queue
+        seek_queue = SeekQueue(
+            dispatcher.seek_ms,
+            observed=lambda: (
+                int(poller.latest.position_ms) if poller.latest is not None else 0
+            ),
+            schedule=lambda delay_s, callback: asyncio.get_running_loop().call_later(
+                delay_s, callback
+            ),
+        )
 
         def _scrub_sink(target_seconds: int) -> None:
             """UDP 0x04 scrub target (seconds) → Doc 09 absolute seek (ms)."""
-            target_ms = int(target_seconds) * 1000
-            result = dispatcher.seek_ms(target_ms)
-            if result.ok:
-                # Keep the delta chain anchored to where scrubbing left off.
-                seek_tracker.record(target_ms)
+            # absolute() flushes any queued deltas, dispatches immediately and
+            # rebases the chain — the queue owns the ordering and the clamp.
+            seek_queue.absolute(int(target_seconds) * 1000)
 
         async def _progress_provider() -> tuple[int, int, bool]:
             snapshot = poller.latest
@@ -509,27 +523,30 @@ async def run_agent(argv: list[str] | None = None) -> int:
             try:
                 if action == Action.SEEK:
                     position_ms = int(payload["position_ms"])
-                    result = dispatcher.seek_ms(position_ms)
-                    # Rebase: an absolute seek (ruler/tap commit) invalidates the
-                    # delta chain — without this the next SEEK_DELTA chained off
-                    # the pre-seek base and snapped the position back.
-                    if result.ok:
-                        seek_tracker.record(position_ms)
+                    # Absolute commit (ruler/tap): queue flushes pending deltas
+                    # first, dispatches immediately, then rebases the chain —
+                    # so a burst that mixes scrubbing and stepping never chains
+                    # off a pre-seek base and snaps back.
+                    result = seek_queue.absolute(position_ms)
                 elif action == Action.SEEK_DELTA:
-                    snapshot = poller.latest
-                    current = int(snapshot.position_ms) if snapshot is not None else 0
                     delta = int(payload["delta_ms"])
-                    # Rapid taps must chain off our own last delta target: the
-                    # snapshot can lag ~250 ms plus 500 ms position chunks, so
-                    # burst taps would otherwise re-seek the same stale base.
-                    target = max(0, seek_tracker.next_base(current) + delta)
-                    result = dispatcher.seek_ms(target)
-                    if result.ok:
-                        seek_tracker.record(target)
+                    # Round 7 queue: chains off the *pending* target while a
+                    # burst is open (never the stale 250 ms/500 ms snapshot) and
+                    # coalesces rapid taps into one trailing final seek. The
+                    # max(0, ·) clamp lives inside the queue.
+                    result = seek_queue.delta(delta)
                 elif action == Action.SET_SPEED:
                     result = dispatcher.set_speed(float(payload["multiplier"]))
                 elif action == Action.FRAME_STEP:
+                    # Queued deltas predate this step — deliver them first so
+                    # request order is preserved, then drop the chain: frame
+                    # stepping moved the video outside the queue, so the next
+                    # delta must trust fresh telemetry instead of snapping over
+                    # the stepped frames.
+                    seek_queue.flush()
                     result = dispatcher.frame_step(str(payload.get("direction", "FORWARD")))
+                    if result.ok:
+                        seek_queue.note_external_move()
                 elif action == Action.SET_VOLUME:
                     result = dispatcher.dispatch(action, value=int(payload["percent"]))
                 elif action == Action.SET_SUBS:

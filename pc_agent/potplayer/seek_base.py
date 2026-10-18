@@ -57,3 +57,10 @@ class SeekBaseTracker:
         with self._lock:
             self._target_ms = int(target_ms)
             self._recorded_at = self._clock()
+
+    def invalidate(self) -> None:
+        """Drop the chain (external move, e.g. frame step): the next base is the
+        fresh snapshot instead of our now-possibly-wrong target."""
+        with self._lock:
+            self._target_ms = None
+

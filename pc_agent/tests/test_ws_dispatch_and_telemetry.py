@@ -615,7 +615,9 @@ _PHASE2_FILES = (
     "mobile_app/lib/features/keyboard/full_keyboard.dart",
     "mobile_app/lib/features/display/monitor_power_sheet.dart",
     # Wave 2.B
-    "mobile_app/lib/features/bed_mode/blind_gesture_pad.dart",
+    # Wave 2.B — bed mode's blind_gesture_pad.dart was removed in round 6
+    # (bed mode feature dropped); the keyboard trigger zone replaced it.
+    "mobile_app/lib/features/trackpad/keyboard_trigger_overlay.dart",
     "mobile_app/lib/core/haptics/haptic_engine.dart",
     "mobile_app/lib/hardware_hooks/volume_button_hijack.dart",
     "mobile_app/lib/hardware_hooks/call_autopause_hook.dart",

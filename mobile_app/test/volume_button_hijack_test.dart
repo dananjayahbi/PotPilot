@@ -382,6 +382,35 @@ void main() {
       });
     });
 
+    test('round 7: mid-hold telemetry updates never re-base the seek anchor',
+        () {
+      fakeAsync((FakeAsync async) {
+        simulateKeyDownEvent(LogicalKeyboardKey.audioVolumeUp);
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 600)); // → seekActive (150 s)
+        expect(scrubs, hasLength(1));
+
+        // Poller catches up mid-hold: the live position now reads 150 s.
+        // The old formula (live position + step × index) would compute
+        // 150 + 30×2 = 210 next — a 30 s skip ("goes here and there").
+        current = telemetry(positionMs: 150000);
+
+        simulateKeyRepeatEvent(LogicalKeyboardKey.audioVolumeUp);
+        async.flushMicrotasks();
+        simulateKeyRepeatEvent(LogicalKeyboardKey.audioVolumeUp);
+        async.flushMicrotasks();
+        simulateKeyUpEvent(LogicalKeyboardKey.audioVolumeUp);
+        async.flushMicrotasks();
+
+        // Anchor (120 s, captured at the hold's first scrub) + 30 s × index.
+        expect(
+          scrubs.map((Uint8List b) => _decodeScrub(b).target).toList(),
+          <int>[150, 180, 210],
+        );
+        UdpSender.instance.sendSink = null;
+      });
+    });
+
     test('stale telemetry (>1 s) suppresses seek sends, keeps local ticks',
         () {
       fakeAsync((FakeAsync async) {

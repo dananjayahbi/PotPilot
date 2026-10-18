@@ -539,10 +539,14 @@ def test_potplayer_adapter_payloads_and_failures(wired) -> None:
     assert dispatcher.speed_provider() == 1.25
 
     # Back-to-back taps chain off the previous delta target, NOT the (stale)
-    # snapshot — rapid-tap regression (user: "starts again where we start tapping").
+    # snapshot — rapid-tap regression (user: "starts again where we start
+    # tapping"). Round 7: the PC-side queue may coalesce the trailing tap
+    # (reply is ok either way), so flush before asserting the final target —
+    # signals must never mix and the last target must chain correctly.
     reply = _dispatch(router, "CMD_POTPLAYER", "SEEK_DELTA", {"delta_ms": 500})
-    assert dispatcher.calls[-1] == ("seek_ms", 13_345)
     assert reply["payload"] == {"ok": True}
+    agent_main.seek_queue.flush()  # deliver trailing coalesced seek (no-op if inline)
+    assert dispatcher.calls[-1] == ("seek_ms", 13_345)
 
 
 def test_cmd_key_adapter_validates_payloads(wired, monkeypatch) -> None:

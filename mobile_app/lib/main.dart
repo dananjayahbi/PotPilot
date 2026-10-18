@@ -10,7 +10,6 @@ import 'core/storage/connection_cache.dart';
 import 'core/theme/oled_theme.dart';
 import 'features/deck/potplayer_deck.dart';
 import 'features/library/movie_browser.dart';
-import 'features/settings/display_settings_card.dart' show applyBrightness;
 import 'features/trackpad/keyboard_trigger_overlay.dart';
 import 'features/trackpad/virtual_trackpad.dart';
 import 'hardware_hooks/call_autopause_hook.dart';
@@ -39,10 +38,6 @@ Future<void> main() async {
   try {
     prefs = await SharedPreferences.getInstance();
     await ConnectionCache.instance.init(injected: prefs);
-    // Round-6 DISPLAY: restore the saved controller brightness before the
-    // first frame so launch never flashes the previous value (guarded —
-    // missing platform channels in tests degrade silently).
-    await applyBrightness(ConnectionCache.instance.brightness);
   } on Object catch (error) {
     debugPrint('main: storage bootstrap failed: $error');
   }

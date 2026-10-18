@@ -344,8 +344,11 @@ class ScrubController extends ChangeNotifier {
     _notify();
   }
 
-  /// Commits the final WS `SEEK {"position_ms": targetMs}` (plus one last
-  /// UDP bridge packet) and enters Settling (§4.5).
+  /// Commits the final WS `SEEK {"position_ms": targetMs}` and enters
+  /// Settling (§4.5). Round 7: the final UDP bridge packet is sent only when
+  /// WS is DOWN — on a live WS it could arrive after the ms-precision seek
+  /// and drag the PC-side chain back down to a floored-seconds position
+  /// (stale-source rebase → jitter). UDP remains the fallback commit.
   void endDrag() {
     if (_phase != ScrubPhase.dragging) {
       return;
@@ -357,11 +360,12 @@ class ScrubController extends ChangeNotifier {
     }
     final int target = _clampTarget(_targetMs, duration);
     _targetMs = target;
-    _transport.sendScrub(target ~/ 1000); // final UDP (state diagram)
     _committedTargetMs = target;
     _commitFrameTs = _lastState.timestamp;
     if (_transport.wsConnected) {
-      _transport.sendSeek(target);
+      _transport.sendSeek(target); // authoritative ms-precision commit
+    } else {
+      _transport.sendScrub(target ~/ 1000); // WS down: UDP-only fallback
     }
     _phase = ScrubPhase.settling;
     _startSettleTimer();
